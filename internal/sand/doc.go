@@ -89,7 +89,9 @@ func (t Thread) Render() (string, error) {
 	}
 
 	if t.DiffHunk != "" {
-		fmt.Fprintf(&b, "\n## diff\n\n```diff\n%s\n```\n", strings.TrimRight(t.DiffHunk, "\n"))
+		hunk := strings.TrimRight(t.DiffHunk, "\n")
+		f := fence(hunk)
+		fmt.Fprintf(&b, "\n## diff\n\n%sdiff\n%s\n%s\n", f, hunk, f)
 	}
 
 	fmt.Fprintf(&b, "\n%s\n\n%s\n", replyHeading, t.hint())
@@ -102,7 +104,20 @@ func (t Thread) Render() (string, error) {
 var (
 	frontMatter = regexp.MustCompile(`(?s)\A---\n(.*?)\n---\n`)
 	hintComment = regexp.MustCompile(`(?s)<!--.*?-->`)
+	backticks   = regexp.MustCompile("`+")
 )
+
+// fence is a backtick run long enough to hold s. A review of a markdown file (this repo's own
+// CLAUDE.md, say) puts fenced code inside the diff hunk, and a fixed three-backtick fence
+// closes on the first of those: the rest of the hunk then renders as prose, and the reader
+// silently sees a different diff from the one the reviewer commented on.
+func fence(s string) string {
+	longest := 0
+	for _, run := range backticks.FindAllString(s, -1) {
+		longest = max(longest, len(run))
+	}
+	return strings.Repeat("`", max(3, longest+1))
+}
 
 // Parse reads back the parts of a thread file that the box owns: the front matter and
 // the drafted reply. Comments and DiffHunk are not recovered — pull regenerates those

@@ -70,6 +70,38 @@ func TestReplyContainingHeading(t *testing.T) {
 	}
 }
 
+// A review of a markdown file hands us a diff hunk with fences in it. An added line is
+// prefixed with "+", which cannot close a fence, but an unchanged one is prefixed with a
+// single space, and CommonMark allows up to three spaces before a closing fence. So a
+// fixed ```diff fence ends at the first context line holding one, and the rest of the hunk
+// renders as prose: the agent reads something other than what the reviewer marked up.
+func TestDiffFenceSurvivesFencesInTheHunk(t *testing.T) {
+	th := sample()
+	th.DiffHunk = "@@ -1,5 +1,7 @@\n Run it:\n \n ```sh\n-make chekc\n+make check\n ```\n \n nested"
+
+	s, err := th.Render()
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	_, after, ok := strings.Cut(s, "## diff\n\n")
+	if !ok {
+		t.Fatalf("no diff section:\n%s", s)
+	}
+	open, rest, _ := strings.Cut(after, "\n")
+	closing := strings.TrimSuffix(open, "diff")
+	hunk, _, ok := strings.Cut(rest, "\n"+closing+"\n")
+	if !ok || !strings.Contains(hunk, "nested") {
+		t.Fatalf("hunk not rendered whole inside %q:\n%s", open, s)
+	}
+	// The property, rather than a markdown parser: the fence outruns every backtick run
+	// inside it, so no line of the hunk can close the block whatever its indent.
+	for _, run := range backticks.FindAllString(hunk, -1) {
+		if len(run) >= len(closing) {
+			t.Errorf("fence %q does not outrun %q in the hunk", open, run)
+		}
+	}
+}
+
 func TestParseErrors(t *testing.T) {
 	for _, s := range []string{
 		"no front matter here",
