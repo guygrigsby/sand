@@ -1,2 +1,3 @@
 build/
-sand
+# Anchored: an unanchored "sand" also matches internal/sand/.
+/sand
