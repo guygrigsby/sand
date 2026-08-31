@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 )
 
@@ -286,6 +287,50 @@ func TestPullStartsTheAgentAndReportsBack(t *testing.T) {
 		if !strings.Contains(printed, want) {
 			t.Errorf("output missing %q:\n%s", want, printed)
 		}
+	}
+}
+
+// Two agents in one checkout is not a race to lose, it is a corrupted working tree: they edit
+// the same files, commit over each other and answer the same thread twice. Two PRs share a
+// repo, and an operator who thinks a run has stalled re-runs it, so this is a Tuesday.
+func TestPullRefusesASecondAgentInTheSameCheckout(t *testing.T) {
+	remoteBase, _ := harness(t)
+	home := os.Getenv("HOME")
+	if err := os.MkdirAll(filepath.Join(home, "projects", "r"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Stand in for the agent that is already running: hold its lock, nothing else.
+	lock := agentLock(remoteBase, "r")
+	if err := os.MkdirAll(filepath.Dir(lock), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(lock, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatalf("could not take the lock the test is about: %v", err)
+	}
+
+	ran := filepath.Join(home, "ran")
+	agent := filepath.Join(home, "fake-agent")
+	if err := os.WriteFile(agent, []byte("#!/bin/sh\ntouch \""+ran+"\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	flagNoAgent, flagAgent = false, agent
+	captureStdout(t)
+
+	err = runPull(nil)
+	if err == nil {
+		t.Fatal("pull started a second agent in a locked checkout")
+	}
+	if !strings.Contains(err.Error(), "already working") {
+		t.Errorf("error does not say an agent is already there: %v", err)
+	}
+	if _, err := os.Stat(ran); err == nil {
+		t.Error("the second agent ran anyway")
 	}
 }
 

@@ -133,6 +133,16 @@ printed as answered or left: an agent that died halfway is the case that matters
 The prompt names only the PR, the directory and the thread count, and points at the skill for
 everything else. Two copies of the rules is two versions of the rules.
 
+The agent runs under `flock -n` on `<remote_dir>/locks/<repo>.lock`, held for the whole run.
+Two agents in one checkout is not a race to lose, it is a corrupted working tree: they edit the
+same files, commit over each other and answer the same thread twice. It is also easy to cause,
+since `pull` is one command per PR, two PRs share a repo, and an operator who thinks a run has
+stalled re-runs it. A missing `flock` on the box is a stop, not a fallback to running unlocked.
+The lock is keyed by repo rather than by the checkout path, so two `--repo-dir` runs of one repo
+wait on each other: over-locking costs a wait, under-locking costs the tree. `flock -n` is
+silent on failure, so the remote line uses exit codes (75 taken, 66 no checkout, 69 no flock)
+and `RunAgent` turns them into the message.
+
 PR defaults to the one for the Mac's current branch; a number or a PR URL overrides.
 
 `host` is the one setting with no default and the one thing a new Mac has to be told: it names

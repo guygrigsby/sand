@@ -548,6 +548,7 @@ func runPull(args []string) error {
 		run = AgentRun{
 			Host:    cfg.Host,
 			Dir:     cmp.Or(flagRepoDir, checkoutDir(target)),
+			Lock:    agentLock(cfg.RemoteDir, target.Repo),
 			Command: argv,
 			Prompt:  agentPrompt(target, remotePath, len(threads)-replied),
 			Out:     os.Stdout,

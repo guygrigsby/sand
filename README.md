@@ -75,6 +75,10 @@ Signing shows the branch diffstat before it asks, and refuses any commit whose a
 committer is not your git identity: your signature would be vouching for someone else's work.
 `--allow-other-authors` overrides that, and `--yes` deliberately does not.
 
+One agent per repo checkout on the box, enforced with `flock` there: a second `pull` for
+another PR of the same repo refuses to start one while the first is working, rather than let
+two agents edit one tree. `--no-agent` writes the files and leaves it alone.
+
 `comments pull` is safe to re-run. Replies already drafted on the box survive, and a thread
 already posted stays `status: sent` and is not posted twice.
 

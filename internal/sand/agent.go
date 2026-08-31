@@ -8,6 +8,7 @@ package sand
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -42,27 +43,53 @@ func agentCommand(cfg Config) ([]string, error) {
 type AgentRun struct {
 	Host    string
 	Dir     string   // working dir on the box: the repo checkout, not the pulled files
+	Lock    string   // lockfile on the box, held for the whole run
 	Command []string // agent argv, prompt appended
 	Prompt  string
 	Out     io.Writer
 }
 
+// Exit codes the remote line uses to say what went wrong, since ssh gives back only a status.
+// 66 and 75 are EX_NOINPUT and EX_TEMPFAIL, which is close enough to what they mean here.
+const (
+	exitNoCheckout = 66
+	exitLocked     = 75
+	exitNoFlock    = 69
+)
+
 // RunAgent runs the agent on the box with the pulled threads to work on, streaming its
 // output. It blocks until the agent exits.
+//
+// Under flock, because two agents in one checkout is corruption, not a race to lose: they edit
+// the same working tree, commit over each other and answer the same thread file twice. And it
+// is easy to cause. `pull` is one command per PR, two PRs share a repo, and the operator who
+// thinks a run has stalled re-runs it, which is exactly what every message in this tool tells
+// them to do.
 func RunAgent(r AgentRun) error {
 	if len(r.Command) == 0 {
 		return fmt.Errorf("no agent command: set the harness with `sand config set harness <name>`")
 	}
+	if r.Lock == "" {
+		return fmt.Errorf("no lockfile named for the agent run") // caller bug, not an operator's
+	}
 
-	// One remote line: fail loudly if the checkout is not where we think, since an agent
-	// started in the wrong directory edits the wrong tree.
 	quoted := make([]string, 0, len(r.Command)+1)
 	for _, f := range append(append([]string(nil), r.Command...), r.Prompt) {
 		quoted = append(quoted, shellQuote(f))
 	}
-	dir := remoteQuote(r.Dir)
-	remote := fmt.Sprintf("cd %s 2>/dev/null || { echo \"sand: no checkout at %s on $(hostname)\" >&2; exit 66; }; exec %s",
-		dir, r.Dir, strings.Join(quoted, " "))
+	// One remote line. Fail loudly if the checkout is not where we think, since an agent
+	// started in the wrong directory edits the wrong tree, and fail closed if there is no
+	// flock: running unlocked is the thing being prevented.
+	lock := remoteQuote(r.Lock)
+	remote := fmt.Sprintf("command -v flock >/dev/null 2>&1 || "+
+		"{ echo \"sand: no flock on $(hostname); install util-linux\" >&2; exit %d; }; "+
+		"mkdir -p %s 2>/dev/null; "+
+		"cd %s 2>/dev/null || { echo \"sand: no checkout at %s on $(hostname)\" >&2; exit %d; }; "+
+		"exec flock -n -E %d %s %s",
+		exitNoFlock,
+		remoteQuote(path.Dir(r.Lock)),
+		remoteQuote(r.Dir), r.Dir, exitNoCheckout,
+		exitLocked, lock, strings.Join(quoted, " "))
 
 	cmd := exec.Command(sshBin(), r.Host, remote)
 	stdout, err := cmd.StdoutPipe()
@@ -75,9 +102,35 @@ func RunAgent(r AgentRun) error {
 	}
 	streamAgent(stdout, r.Out)
 	if err := cmd.Wait(); err != nil {
+		switch exitCode(err) {
+		case exitLocked:
+			return fmt.Errorf("an agent is already working in %s:%s (lock %s); "+
+				"let it finish, or re-run with --no-agent and talk to that one",
+				r.Host, r.Dir, r.Lock)
+		case exitNoFlock:
+			return fmt.Errorf("cannot lock %s:%s, so no agent was started", r.Host, r.Dir)
+		}
 		return fmt.Errorf("agent on %s: %w", r.Host, err)
 	}
 	return nil
+}
+
+// exitCode is the remote command's status, or -1 when there is none: ssh itself failing, or
+// the agent dying on a signal.
+func exitCode(err error) int {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return ee.ExitCode()
+	}
+	return -1
+}
+
+// agentLock is the lockfile for a checkout, next to the pulled threads because that directory
+// exists on the box already and is the tool's own. Keyed by repo rather than by the checkout
+// path: `--repo-dir` can point two runs of one repo at different trees, and treating those as
+// one is over-locking, which costs a wait, where under-locking costs a corrupted tree.
+func agentLock(remoteDir, repo string) string {
+	return path.Join(remoteDir, "locks", segment(repo)+".lock")
 }
 
 // streamAgent turns Claude Code's stream-json into readable progress, and passes anything

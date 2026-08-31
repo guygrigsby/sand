@@ -31,6 +31,11 @@ threads you answered and which you left and why. The Mac reads the files back an
 list either way. Nothing changes about the loop below; a human who ran `pull --no-agent` and
 then asked you the same thing gets the same work.
 
+You hold a lock on that checkout for as long as you run (`flock` on
+`~/.sand/locks/<repo>.lock`), so you are the only agent in this tree and nothing else is editing
+it under you. The other side of that: a second pull for another PR of the same repo cannot start
+until you exit, so finish the threads you were given and stop rather than staying open.
+
 ## The loop
 
 1. Read the thread file: the conversation and the `## diff` hunk say what the reviewer
