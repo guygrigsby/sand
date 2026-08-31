@@ -14,6 +14,8 @@ import (
 type Config struct {
 	Host      string `yaml:"host"`       // ssh alias or user@host for the sandbox
 	RemoteDir string `yaml:"remote_dir"` // base dir on the sandbox, ~ allowed
+	Harness   string `yaml:"harness"`    // agent CLI pull starts on the box: see harnesses
+	Model     string `yaml:"model"`      // model to pass it; empty means the harness's own default
 }
 
 const (
@@ -23,7 +25,20 @@ const (
 	// refuses its local username sets it there or with `sand config set host <user>@<box>`.
 	defaultHost      = "guy-llm-sandbox"
 	defaultRemoteDir = "~/.sand"
+	defaultHarness   = "claude"
 )
+
+// configDefault is what a key falls back to when neither the file nor the environment says.
+// Keyed by config key so a new field defaults, documents and overrides itself through the
+// same three tables rather than another if-empty line in Load.
+// An empty default is a real answer: no model means the harness picks, which is the only
+// answer that does not go stale every time a model ships.
+var configDefault = map[string]string{
+	"host":       defaultHost,
+	"remote_dir": defaultRemoteDir,
+	"harness":    defaultHarness,
+	"model":      "",
+}
 
 func ConfigPath() string {
 	if dir, err := os.UserConfigDir(); err == nil {
@@ -49,32 +64,37 @@ func loadFile() (Config, error) {
 	return c, nil
 }
 
-// Load reads the config file. A missing file is not an error — flags or env may cover it.
+// Load reads the config file, with the defaults filled in for whatever it does not say. A
+// missing file is not an error — the defaults, env or flags may cover it.
 func Load() (Config, error) {
 	c, err := loadFile()
+	fill := func() Config {
+		for _, f := range configFields(&c) {
+			if *f.ptr == "" {
+				*f.ptr = configDefault[f.Key]
+			}
+		}
+		return c
+	}
 	if err != nil {
-		return Config{Host: defaultHost, RemoteDir: defaultRemoteDir}, err
+		c = Config{}
+		return fill(), err
 	}
-	if c.Host == "" {
-		c.Host = defaultHost
-	}
-	if c.RemoteDir == "" {
-		c.RemoteDir = defaultRemoteDir
-	}
-	return c, nil
+	return fill(), nil
 }
 
-// Resolve settles host and remote dir: flag, then env, then config file.
+// Resolve settles every value: flag, then SAND_<KEY> in the environment, then the file,
+// then the default. Only host and remote dir have flags, because they are the two the
+// other commands take.
 func Resolve(hostFlag, remoteDirFlag string) (Config, error) {
 	c, err := Load()
 	if err != nil {
 		return c, err
 	}
-	if v := os.Getenv("SAND_HOST"); v != "" {
-		c.Host = v
-	}
-	if v := os.Getenv("SAND_REMOTE_DIR"); v != "" {
-		c.RemoteDir = v
+	for _, f := range configFields(&c) {
+		if v := os.Getenv("SAND_" + strings.ToUpper(f.Key)); v != "" {
+			*f.ptr = v
+		}
 	}
 	if hostFlag != "" {
 		c.Host = hostFlag
@@ -95,6 +115,10 @@ var configDoc = map[string]string{
 	"host": "ssh alias or user@host for the sandbox; ~/.ssh/config resolves key, user, port.",
 	"remote_dir": "base dir on the sandbox. Per-PR files land in\n" +
 		"# <remote_dir>/<owner>/<repo>/pr-<number>/.",
+	"harness": "agent CLI `comments pull` starts on the box to work the threads: claude or\n" +
+		"# pi. `pull --no-agent` starts nothing; `pull --agent '<cmd>'` runs something else once.",
+	"model": "model to run it with, in that harness's own spelling. Empty means the\n" +
+		"# harness's default.",
 }
 
 // configField is one settable key: its name in the file and the field behind it.
@@ -177,9 +201,12 @@ func WriteDefault(host string) (string, error) {
 	if _, err := os.Stat(p); err == nil {
 		return p, fmt.Errorf("%s already exists", p)
 	}
-	c := Config{Host: host, RemoteDir: defaultRemoteDir}
-	if c.Host == "" {
-		c.Host = defaultHost
+	var c Config
+	for _, f := range configFields(&c) {
+		*f.ptr = configDefault[f.Key]
+	}
+	if host != "" {
+		c.Host = host
 	}
 	return p, writeConfig(c)
 }

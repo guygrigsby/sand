@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 //go:embed skill.md
@@ -26,19 +27,51 @@ const (
 // belongs to no single harness, which is the reason to keep it there.
 var canonicalSkillPath = filepath.Join(".agents", "skills", skillFile)
 
-// A harness is one agent CLI on the box. marker is the directory that says it is installed
-// here at all; link is the path its loader reads, which differs per harness: pi discovers
-// top-level .md files in its skills dir, Claude Code only reads <name>/SKILL.md. Neither
-// discovers a top-level .md in ~/.agents/skills, so both get a link.
+// A harness is one agent CLI on the box: where its skill goes, and how to run it headless.
+// One table, because "which harnesses does this tool know about" is one question — the skill
+// install and the agent `comments pull` starts have to agree on the answer.
+//
+// marker is the directory that says the harness is installed here at all; link is the path
+// its loader reads, which differs per harness: pi discovers top-level .md files in its skills
+// dir, Claude Code only reads <name>/SKILL.md. Neither discovers a top-level .md in
+// ~/.agents/skills, so both get a link.
 type agentHarness struct {
-	Name   string
-	marker string
-	link   string
+	Name      string   // the `harness` config value, and the name install prints
+	marker    string   // ~/<marker> exists when this harness is installed
+	link      string   // where its loader reads the skill
+	run       []string // headless invocation; the prompt is appended as one argument
+	modelFlag string   // the flag it takes a model with
 }
 
 var harnesses = []agentHarness{
-	{"pi", ".pi", filepath.Join(".pi", "agent", "skills", skillFile)},
-	{"claude code", ".claude", filepath.Join(".claude", "skills", skillName, "SKILL.md")},
+	{
+		Name: "pi", marker: ".pi", link: filepath.Join(".pi", "agent", "skills", skillFile),
+		run: []string{"pi", "--print"}, modelFlag: "--model",
+	},
+	{
+		Name: "claude", marker: ".claude", link: filepath.Join(".claude", "skills", skillName, "SKILL.md"),
+		// stream-json is what lets the held-open tunnel report progress rather than sit
+		// silent for twenty minutes. bypassPermissions because an unattended headless run
+		// denies every tool it would otherwise ask about — including the edits and the
+		// `make check` it is being asked to do — and a box with no keys, no token and no
+		// route to GitHub is the case that mode is documented for.
+		run: []string{"claude", "--print", "--verbose", "--output-format", "stream-json",
+			"--permission-mode", "bypassPermissions"},
+		modelFlag: "--model",
+	},
+}
+
+// findHarness resolves the `harness` config value.
+func findHarness(name string) (agentHarness, error) {
+	var known []string
+	for _, h := range harnesses {
+		if h.Name == name {
+			return h, nil
+		}
+		known = append(known, h.Name)
+	}
+	return agentHarness{}, fmt.Errorf("unknown harness %q; known: %s (`sand config set harness <name>`)",
+		name, strings.Join(known, ", "))
 }
 
 // SkillInstall is what an install did, so the caller can print it and a test can assert it.

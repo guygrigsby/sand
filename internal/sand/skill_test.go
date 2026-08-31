@@ -69,8 +69,8 @@ func TestInstallSkillLinksHarnessesPresent(t *testing.T) {
 	if body := installed(t, got.Links[0]); body != string(skillDoc) {
 		t.Error("pi's link does not read the skill")
 	}
-	if len(got.Absent) != 1 || got.Absent[0].Name != "claude code" {
-		t.Errorf("absent %v, want claude code", got.Absent)
+	if len(got.Absent) != 1 || got.Absent[0].Name != "claude" {
+		t.Errorf("absent %v, want claude", got.Absent)
 	}
 	if _, err := os.Lstat(filepath.Join(home, ".claude")); !os.IsNotExist(err) {
 		t.Error("install created a directory for a harness that is not installed")
