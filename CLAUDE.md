@@ -7,15 +7,27 @@
 | | Mac | sandbox (whatever `sand config get host` says) |
 |---|---|---|
 | runs `sand` | yes | no |
-| `gh` auth, GitHub access | yes | no |
+| `gh`, the GitHub API | yes | no |
+| `git pull` from GitHub | no | yes, read only |
+| `git push` to GitHub | yes | no |
+| merges | no | yes |
 | edits code | no | yes |
 | canonical source of `sand` | no, a build copy | yes, this repo |
 
-Edit here, never on the Mac. The repo has a GitHub remote
-([guygrigsby/sand](https://github.com/guygrigsby/sand), private, default branch `main`), but only
-on the Mac: this box has no GitHub credentials, so it cannot fetch or push there, and `main` on
-GitHub is signed history the box could not have produced. So the box's work reaches the Mac
-directly, and the Mac is what pushes:
+Git flows one way around a ring, and every step is the only machine that can do its step:
+
+    GitHub --pull--> box --make sync (fetch, --ff-only)--> Mac --push--> GitHub
+
+The box edits, pulls and merges. The Mac fast forwards, signs and pushes, and never pulls from
+GitHub and never merges: a merge or a pull there is a second place history can be decided, and
+then the two copies diverge in a way only a human can untangle. Signing is the one thing that
+moves history on the Mac, and it moves it forward only, so the box picks the result up on its
+next pull. The reason the Mac holds the GitHub push and the box does not is the signing key: what
+gets pushed has to be signed, and only the Mac can sign.
+
+The repo is [guygrigsby/sand](https://github.com/guygrigsby/sand), private, default branch
+`main`. The box needs a read-only credential for it to pull, and no more than that: no `gh`, no
+API token, no push. So the box's work still reaches the Mac directly rather than through GitHub:
 
 - On the Mac, in its copy: `make sync`, which fetches the branch it is on from this box, fast
   forwards to it and installs. No argument needed: `BOX` comes from `sand config get host`, i.e.
@@ -32,14 +44,15 @@ which has no remotes, so it deleted the `origin` that `gh repo create` had just 
 the pre-push hook, the signing config and the reflog. With `.git` excluded, it laid the box's
 working tree over whatever commit the Mac was on, so everything committed on the box since read
 as an uncommitted Mac-side change, and nothing could be checked out or signed until those were
-thrown away. Committed history is the only thing the Mac has any use for: it signs, pushes and
-merges, and an uncommitted file has nothing to sign.
+thrown away. Committed history is the only thing the Mac has any use for: it signs and pushes,
+and an uncommitted file has nothing to sign.
 
 The fetch names the box by URL rather than through a named remote, since `BOX` already names it
-and a remote is one more thing to keep pointed at the same place. `--ff-only`, because a Mac-side
-branch that has moved has moved for one reason, signing, and the answer to that is
-`git push <box> <branch>:<branch>` back to here, not a discarded rewrite. A dirty tree stops it
-for the same reason. A fresh Mac starts with a `git clone`, not a sync.
+and a remote is one more thing to keep pointed at the same place. `--ff-only` is the ring written
+down: a Mac that cannot fast forward is a Mac being asked to merge, which is the box's job, and a
+Mac-side branch that has moved on its own has moved for one reason, signing, which the box picks
+up on its next pull rather than losing to a rewrite. A dirty tree stops it for the same reason. A
+fresh Mac starts with a `git clone`, not a sync.
 
 The `BOX` lookup prefers `$(GO) run . config get host` from the checkout over an installed
 `sand`: `make sync` is what installs the new binary, so the installed one is by definition the
@@ -326,8 +339,8 @@ side, say that in the commit message rather than leaving it unsaid.
 
 `make check` is the gate: `go vet`, `gofmt`, tests, a linux build and the darwin/arm64 build.
 
-There is no `gh`, no GitHub token and no route to github.com from the box, so the tests fake
-both ends: a `gh` stub on `PATH` and `SAND_SSH` pointed at a shim that runs the "remote" command
+There is no `gh` and no GitHub API token on the box, and its git credential is read only, so the
+tests fake both ends: a `gh` stub on `PATH` and `SAND_SSH` pointed at a shim that runs the "remote" command
 locally (`internal/sand/e2e_test.go`). That covers the GraphQL decode, the file format, tar in
 both directions, the merge on re-pull, the reply POST and the sent marking. What it cannot cover
 is GitHub itself — claims about real API behaviour need a run on the Mac against a real PR.

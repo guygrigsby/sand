@@ -2,8 +2,10 @@
 
 Helper CLI for the PR review loop between a Mac and a sandbox dev box. Internal tool.
 
-The box writes the code and has no GitHub access. The Mac has `gh`, the ssh keys and the
-signing key, and never edits code. `sand` runs on the Mac and moves work between them:
+The box writes the code, merges, and can pull from GitHub but not push to it. The Mac has `gh`,
+the ssh keys and the signing key, never edits code and never merges: it fast forwards, signs and
+pushes. Git goes one way around the ring, `GitHub -> box -> Mac -> GitHub`. `sand` runs on the
+Mac and moves work between them:
 
 1. `sand comments pull` fetches the unresolved review threads for a PR, writes them to the
    box as markdown and starts an agent there to answer them.
@@ -154,7 +156,7 @@ Edit in this repo, on the box. Not on the Mac, not over ssh into a deploy target
 `make check` is what CI would call and what to run before every commit. The darwin build is
 part of it because the Mac is the real target.
 
-The box has no `gh`, no GitHub token and no route to github.com, so the tests fake both ends: a
+The box has no `gh` and no GitHub API token, so the tests fake both ends: a
 `gh` stub on `PATH` and `SAND_SSH` pointed at a shim that runs the "remote" command locally
 (`internal/sand/e2e_test.go`). That covers the GraphQL decode, the file format, tar in both
 directions, the merge on re-pull, the reply POST and the sent marking. It cannot cover GitHub

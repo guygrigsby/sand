@@ -5,9 +5,18 @@ description: Work GitHub issues and PR review comments on the sandbox box, where
 
 # Working GitHub issues and PR reviews on the box
 
-This box has no `gh`, no GitHub token and no route to github.com. Issues and review threads get here as
-files, and replies leave the same way. `sand` itself runs on the Mac; never try to run
-`sand` or `gh` here.
+This box has no `gh` and no GitHub API token. Issues and review threads get here as files, and
+replies leave the same way. `sand` itself runs on the Mac; never try to run `sand` or `gh` here.
+
+Git goes one way around a ring, and this box owns two of its four steps:
+
+    GitHub --pull--> this box --the Mac's `make sync`--> Mac --push--> GitHub
+
+So: `git pull` and `git fetch` here, read only, that is the box's credential. Every merge happens
+here too, including bringing `main` into a branch that has fallen behind. Never `git push` from
+here, to GitHub or anywhere else: the Mac pulls from this box, and what leaves for GitHub has to
+be signed, which needs a key this box does not have. If a branch here is behind what the Mac
+signed and pushed, `git pull` is how it catches up, and the hashes will have changed.
 
 ## New issues
 
