@@ -43,11 +43,16 @@ ship:
 
 # Mac from box, run on the Mac, in the Mac's copy. The usual direction, so it takes no
 # arguments; BOX only needs naming for a different box.
+#
+# Excludes .git, like ship does. Source is what travels; git state is each machine's own, and
+# the Mac's is not reproducible from here: its remotes (origin on GitHub, and the one pointing
+# back at this box), its HEAD, its reflog. Syncing over it deleted an origin `gh repo create`
+# had just made, twice.
 sync:
 	@box="$(BOX)"; \
 	case "x$$box" in x) echo "no box: pass BOX=<alias> or run \`sand config init\`"; exit 1;; \
 	  *[[:space:]]*) echo "BOX is not one host: $$box"; exit 1;; esac; \
-	set -x; rsync -a --delete --exclude build "$$box":projects/sand/ ./
+	set -x; rsync -a --delete --exclude build --exclude .git "$$box":projects/sand/ ./
 	$(MAKE) install
 
 clean:

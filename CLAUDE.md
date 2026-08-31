@@ -19,7 +19,12 @@ Edit here, never on the Mac. There is no git remote, so source reaches the Mac b
 - From here, if the Mac accepts ssh: `make ship MAC=user@mac`. No default: the Mac's address
   is not in sand's config and guessing it would point an rsync `--delete` at whatever answered.
 
-Both use `--delete`, so a stray edit on the Mac is overwritten rather than left to diverge.
+Both use `--delete`, so a stray edit on the Mac is overwritten rather than left to diverge. Both
+also exclude `.git`: source is what travels, git state is each machine's own. The Mac's is not
+reproducible from the box, since it holds the remotes (`origin` on GitHub, and one pointing back
+at the box), the signing config and the reflog, and the box has no remotes at all. Syncing over
+it deleted the `origin` that `gh repo create` had just made. A fresh Mac therefore starts with a
+`git clone`, not a `make sync`.
 
 The `BOX` lookup prefers `$(GO) run . config get host` from the checkout over an installed
 `sand`: `make sync` is what installs the new binary, so the installed one is by definition the
