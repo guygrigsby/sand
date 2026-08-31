@@ -29,13 +29,13 @@ redeploy: install
 # Box to Mac, run here, when the Mac accepts ssh from the sandbox.
 ship:
 	@[ -n "$(MAC)" ] || { echo "usage: make ship MAC=user@mac"; exit 1; }
-	rsync -a --delete --exclude build --exclude .git ./ $(MAC):src/gh-sync/
-	ssh $(MAC) 'make -C src/gh-sync install'
+	rsync -a --delete --exclude build --exclude .git ./ $(MAC):src/sand/
+	ssh $(MAC) 'make -C src/sand install'
 
 # Mac from box, run on the Mac, in the Mac's copy. The usual direction.
 sync:
 	@[ -n "$(BOX)" ] || { echo "usage: make sync BOX=<sandbox-ssh-alias>   (run on the Mac)"; exit 1; }
-	rsync -a --delete --exclude build $(BOX):projects/gh-sync/ ./
+	rsync -a --delete --exclude build $(BOX):projects/sand/ ./
 	$(MAKE) install
 
 clean:

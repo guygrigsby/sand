@@ -1,4 +1,4 @@
-# gh-sync / `sand`
+# `sand`
 
 `sand` is a helper CLI for development on the sandbox box. It runs **on the Mac**.
 
