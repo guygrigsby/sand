@@ -51,19 +51,19 @@ func sendDir(host, localDir, remoteDir string) error {
 		return err
 	}
 	ssh.Stdin = pipe
-	var stderr bytes.Buffer
-	ssh.Stderr = &stderr
-	tar.Stderr = &stderr
+	var sshErr, tarErr bytes.Buffer
+	ssh.Stderr = &sshErr
+	tar.Stderr = &tarErr
 
 	if err := ssh.Start(); err != nil {
 		return fmt.Errorf("ssh %s: %w", host, err)
 	}
 	if err := tar.Run(); err != nil {
-		return fmt.Errorf("tar %s: %w", localDir, err)
+		return fmt.Errorf("tar %s: %w (%s)", localDir, err, strings.TrimSpace(tarErr.String()))
 	}
 	pipe.Close()
 	if err := ssh.Wait(); err != nil {
-		return fmt.Errorf("ssh %s: %w (%s)", host, err, strings.TrimSpace(stderr.String()))
+		return fmt.Errorf("ssh %s: %w (%s)", host, err, strings.TrimSpace(sshErr.String()))
 	}
 	return nil
 }
