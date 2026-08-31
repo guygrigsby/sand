@@ -1,7 +1,7 @@
 BIN := sand
 GO ?= go
 
-.PHONY: build test lint mac check install redeploy ship sync skills clean
+.PHONY: build test lint mac check install redeploy ship sync clean
 
 build:
 	$(GO) build -o build/$(BIN) .
@@ -36,11 +36,6 @@ sync:
 	@[ -n "$(BOX)" ] || { echo "usage: make sync BOX=<sandbox-ssh-alias>   (run on the Mac)"; exit 1; }
 	rsync -a --delete --exclude build $(BOX):projects/sand/ ./
 	$(MAKE) install
-
-# Writes the skill this build carries and links whichever harnesses this machine has.
-# `sand skill install` does the same from an installed binary, with no checkout.
-skills:
-	$(GO) run . skill install
 
 clean:
 	rm -rf build

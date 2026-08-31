@@ -58,8 +58,10 @@ It is `go:embed`ed into the binary, so a box holding nothing but `sand` can stil
 so the skill can never be a different version from the tool it describes. That is why it lives in
 the package and not in a `skills/` directory.
 
-`sand skill install` (or `make skills`) writes it to `~/.agents/skills/sand.md` and links the
-harnesses that are actually installed on that machine at that one file:
+`sand skill install` writes it to `~/.agents/skills/sand.md` and links the harnesses that are
+actually installed on that machine at that one file. The program owns this, not the Makefile:
+the binary is what carries the text, and the machine that needs the skill may have no checkout
+and no `make`.
 
 | harness | present when | link |
 |---|---|---|
