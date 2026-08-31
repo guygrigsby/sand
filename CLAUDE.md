@@ -14,39 +14,41 @@
 Edit here, never on the Mac. The repo has a GitHub remote
 ([guygrigsby/sand](https://github.com/guygrigsby/sand), private, default branch `main`), but only
 on the Mac: this box has no GitHub credentials, so it cannot fetch or push there, and `main` on
-GitHub is signed history the box could not have produced. So source still reaches the Mac by
-rsync, and the Mac is what pushes:
+GitHub is signed history the box could not have produced. So the box's work reaches the Mac
+directly, and the Mac is what pushes:
 
-- On the Mac, in its copy: `make sync` (rsyncs from here, then installs). No argument needed:
-  `BOX` comes from `sand config get host`, i.e. the same host the tool itself uses, so
-  `sand config set host <alias>` moves both. `BOX=<alias>` and `SAND_HOST` still override.
-- From here, if the Mac accepts ssh: `make ship MAC=user@mac`. No default: the Mac's address
-  is not in sand's config and guessing it would point an rsync `--delete` at whatever answered.
+- On the Mac, in its copy: `make sync`, which fetches the branch it is on from this box, fast
+  forwards to it and installs. No argument needed: `BOX` comes from `sand config get host`, i.e.
+  the same host the tool itself uses, so `sand config set host <alias>` moves both.
+  `BOX=<alias>` and `SAND_HOST` still override.
+- From here, if the Mac accepts ssh: `make ship MAC=user@mac`. That one is still an rsync,
+  because its target is `src/sand`, a build copy and not a checkout. No default: the Mac's
+  address is not in sand's config and guessing it would point an rsync `--delete` at whatever
+  answered.
 
-Both use `--delete`, so a stray edit on the Mac is overwritten rather than left to diverge. Both
-also exclude `.git`: source is what travels, git state is each machine's own. The Mac's is not
-reproducible from the box, since it holds the remotes (`origin` on GitHub, and one pointing back
-at the box), the pre-push hook, the signing config and the reflog, and the box has no remotes at
-all. Syncing over it deleted the `origin` that `gh repo create` had just made. A fresh Mac
-therefore starts with a `git clone`, not a `make sync`.
+`sync` fetches rather than rsyncs because the Mac's copy is a git checkout, and rsync fought it
+from both ends. With `.git` included, `--delete` replaced the Mac's git state with the box's,
+which has no remotes, so it deleted the `origin` that `gh repo create` had just made, along with
+the pre-push hook, the signing config and the reflog. With `.git` excluded, it laid the box's
+working tree over whatever commit the Mac was on, so everything committed on the box since read
+as an uncommitted Mac-side change, and nothing could be checked out or signed until those were
+thrown away. Committed history is the only thing the Mac has any use for: it signs, pushes and
+merges, and an uncommitted file has nothing to sign.
 
-Which leaves the commits, and the Mac needs those, not just the files: it is where signing,
-pushing and the merge happen. `make sync` follows the rsync with `git fetch --all`, so the box's
-history arrives as remote-tracking refs of whatever remote the Mac has pointing back at the box.
-It fetches and stops: it does not merge, check out or reset anything, because which branch to
-take and whether it has been signed yet is the Mac's decision, and the rsync has already put the
-files there. `git switch -C <branch> <box-remote>/<branch>` is what makes those files stop
-reading as uncommitted changes. A failed fetch does not fail the sync, since the remote may not
-exist yet and the tailnet may be down, and the files and the install are still worth having.
+The fetch names the box by URL rather than through a named remote, since `BOX` already names it
+and a remote is one more thing to keep pointed at the same place. `--ff-only`, because a Mac-side
+branch that has moved has moved for one reason, signing, and the answer to that is
+`git push <box> <branch>:<branch>` back to here, not a discarded rewrite. A dirty tree stops it
+for the same reason. A fresh Mac starts with a `git clone`, not a sync.
 
 The `BOX` lookup prefers `$(GO) run . config get host` from the checkout over an installed
 `sand`: `make sync` is what installs the new binary, so the installed one is by definition the
 old one, and an older one with no `config get` answers with the whole config file. It falls back
 to the installed `sand config get host` when the checkout does not compile, because the checkout
-is also what sync overwrites: a Mac copy mid-way through a half-synced or half-edited state
-cannot answer where the box is, and that is exactly when someone runs sync. The recipe refuses a
-`BOX` that is empty or more than one word rather than handing that to rsync, which also catches
-an installed `sand` too old to know `config get`, and says to pass `BOX=<alias>`. It is expanded
+is also what sync fast forwards: a Mac copy sitting on a commit that does not build cannot answer
+where the box is, and that is exactly when someone runs sync. The recipe refuses a `BOX` that is
+empty or more than one word rather than pasting it into a git URL, which also catches an
+installed `sand` too old to know `config get`, and says to pass `BOX=<alias>`. It is expanded
 once, inside the `sync` recipe, so `make build` and `make check` never pay for the compile and
 sync does not pay for it three times.
 

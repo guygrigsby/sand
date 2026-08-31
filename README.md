@@ -38,24 +38,27 @@ On the box, from this repo:
 `skill install` is the only reason the box needs the binary. The skill text is compiled into
 it, so the skill can never be a different version from the tool it describes.
 
-On the Mac, first time, there is no git remote so the source arrives by rsync:
+On the Mac, first time:
 
-    rsync -a --exclude build <box>:projects/sand/ ~/src/sand/
-    cd ~/src/sand
+    git clone git@github.com:guygrigsby/sand.git
+    cd sand
     make install
     sand config init     # asks for the box, writes ~/.config/sand/config.yaml
 
-After that, in the Mac's copy:
+After that, in the Mac's copy, on the branch you want from the box:
 
-    make sync            # rsync from the box, then install
+    make sync            # fetch that branch from the box, fast forward, install
 
 `make sync` takes no argument: it reads the box from `sand config get host`, the same host the
-tool itself uses, so `sand config set host <alias>` moves both. `BOX=<alias>` overrides.
+tool itself uses, so `sand config set host <alias>` moves both. `BOX=<alias>` overrides. It
+fast forwards only, so it stops rather than discarding a branch the Mac has signed; push that
+back to the box instead.
 
-Or push from the box, when the Mac accepts ssh: `make ship MAC=user@mac`.
+Or push from the box, when the Mac accepts ssh: `make ship MAC=user@mac`. That is an rsync with
+`--delete` into `src/sand`, a build copy rather than a checkout.
 
-Both directions rsync with `--delete`. The box is the canonical source and the Mac holds a
-build copy, so never edit the Mac's copy, it gets overwritten.
+The box is the canonical source, so never edit the Mac's copy: `sync` refuses to overwrite the
+edit, and nothing downstream of it will accept an uncommitted change anyway.
 
 ## Use
 
