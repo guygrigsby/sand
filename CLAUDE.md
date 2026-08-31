@@ -18,6 +18,32 @@ Edit here, never on the Mac. There is no git remote, so source reaches the Mac b
 
 Both use `--delete`, so a stray edit on the Mac is overwritten rather than left to diverge.
 
+## Commands
+
+`sand` is where the Mac-side scripts for this workflow are being consolidated, so each one is a
+subcommand rather than a shell file: `comments` (below), `sign`, `skill`, `config`.
+
+## Signing: `sand sign [branch]`
+
+The box has no keys, so commits land unsigned and get signed on the Mac. `sand sign` imports the
+branch with `aif`, then re-creates every commit the branch adds over `<remote>/<base>` with
+`git commit-tree -S` under `git filter-branch`, verifies the result and offers to push with
+`--force-with-lease`. Flags: `--remote` (origin), `--base` (main), `--yes`, `--push`.
+
+- **filter-branch, not rebase.** It replays the original trees with rewritten parents, so merge
+  commits survive and no content conflict is possible. A rebase would flatten or stall.
+- **Refusals come before the rewrite:** protected branch (`main`, `master`, `develop`, `trunk`,
+  `release/*`), a rebase/merge/cherry-pick in progress, a dirty tree, a missing `aif`, a missing
+  base ref, no common history. A missing `aif` is a stop, never a fallback to another sync route.
+- **Verification comes after it:** every branch-unique commit must carry a `gpgsig` header and the
+  commit count must be unchanged, or nothing is pushed. A recovery branch
+  (`<branch>-before-signing-<timestamp>`) is made before the rewrite and kept afterwards.
+- **Both prompts read one stdin through one reader.** A `bufio.Reader` per question swallows the
+  next answer, which silently turned a "yes, push" into "not pushed" (`sign_test.go` covers it).
+- **Signing changes hashes.** A hash already quoted in a posted reply stops existing upstream, so
+  sign before `comments push`, not after.
+- `SAND_AIF` overrides the `aif` binary, which is how the tests import a branch without it.
+
 ## First feature: PR review comments
 
 - `sand comments pull [pr]` — unresolved inline review threads plus review summary bodies for

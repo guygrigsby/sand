@@ -51,6 +51,17 @@ Name what changed and link the commit that changed it, backticked short hash. No
 what you did instead and why, in one or two sentences. If a thread is `outdated: true` the
 code moved under it, so check the current file before answering.
 
+## Signatures, and why the hash you quote can move
+
+Commits made here are unsigned: this box has no keys and is not getting any. They are signed
+on the Mac afterwards with `sand sign <branch>`, which re-creates every commit the branch adds
+with a signature and force-pushes the result. Do not try to sign or rewrite history here.
+
+That rewrite changes commit hashes. So a `commit:` you recorded, and a hash quoted in a reply
+already posted by `sand comments push`, will not exist on the remote once the branch is signed.
+Signing before pushing replies is the order that leaves the hashes true, so if you have replies
+waiting and the branch is unsigned, say so when you hand back rather than assuming either order.
+
 ## This file
 
 It lives at `~/.agents/skills/sand.md`, written there by `sand skill install` out of the `sand`

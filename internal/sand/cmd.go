@@ -17,6 +17,10 @@ var (
 	flagPR        string
 	flagDryRun    bool
 	flagAll       bool
+	flagRemote    string
+	flagBase      string
+	flagYes       bool
+	flagPush      bool
 )
 
 // betweenPosts is a base courtesy delay between reply POSTs. The replies endpoint sends
@@ -45,7 +49,40 @@ func root() *cobra.Command {
 	}
 	c.PersistentFlags().StringVar(&flagHost, "host", "", "sandbox ssh alias or user@host (overrides config)")
 	c.PersistentFlags().StringVar(&flagRemoteDir, "remote-dir", "", "base dir on the sandbox (overrides config)")
-	c.AddCommand(commentsCmd(), configCmd(), skillCmd())
+	c.AddCommand(commentsCmd(), configCmd(), signCmd(), skillCmd())
+	return c
+}
+
+func signCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "sign [branch]",
+		Short: "Sign the commits a sandbox branch adds, on the Mac",
+		Long: "Imports the branch with aif, then re-creates every commit unique to it with a\n" +
+			"signature, preserving the commit graph including merges. Verifies that every\n" +
+			"rewritten commit is signed and that none went missing before offering to push.\n" +
+			"Leaves a recovery branch behind either way.\n\n" +
+			"Branch defaults to the current one, and is refused if it is main, master,\n" +
+			"develop, trunk or release/*.",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			o := SignOpts{
+				Remote: flagRemote,
+				Base:   flagBase,
+				Yes:    flagYes,
+				Push:   flagPush,
+				In:     cmd.InOrStdin(),
+				Out:    cmd.OutOrStdout(),
+			}
+			if len(args) > 0 {
+				o.Branch = args[0]
+			}
+			return Sign(o)
+		},
+	}
+	c.Flags().StringVar(&flagRemote, "remote", "origin", "remote to compare against and push to")
+	c.Flags().StringVar(&flagBase, "base", "main", "base branch on that remote")
+	c.Flags().BoolVarP(&flagYes, "yes", "y", false, "skip the confirmation before rewriting")
+	c.Flags().BoolVar(&flagPush, "push", false, "push with --force-with-lease once verified, without asking")
 	return c
 }
 
