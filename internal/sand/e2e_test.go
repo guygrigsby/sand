@@ -421,6 +421,180 @@ func TestPushDryRunWarnsAboutUnsignedCommits(t *testing.T) {
 	}
 }
 
+// The whole loop end to end on the point that breaks it: the agent commits on a box with no
+// key and records that hash, signing on the Mac replaces the commit, and the reply must quote
+// what is actually on GitHub rather than the hash that stopped existing.
+func TestPushRepointsTheHashSigningMoved(t *testing.T) {
+	dir, _ := signRepo(t)
+	// The fake gh says the PR's head branch is "topic", and that is the branch the hashes
+	// get checked against, so the repo has to agree.
+	mustRun(t, dir, "git", "switch", "--quiet", "-c", "topic")
+	recorded := mustRun(t, dir, "git", "rev-parse", "--short=7", "HEAD")
+
+	remoteBase, ghLog := harness(t)
+	var signOut strings.Builder
+	o := signOpts(&signOut, "")
+	o.Branch, o.Push = "topic", true
+	if _, err := Sign(o); err != nil {
+		t.Fatalf("sign: %v\n%s", err, signOut.String())
+	}
+	signed := mustRun(t, dir, "git", "rev-parse", "--short=7", "origin/topic")
+	if signed == recorded {
+		t.Fatalf("signing did not move the commit, so there is nothing to test: %s", recorded)
+	}
+
+	if err := runPull(nil); err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	p := filepath.Join(remoteBase, "o", "r", "pr-42", "c-2043881.md")
+	drafted := strings.Replace(read(t, p), `commit: ""`, "commit: "+recorded, 1)
+	if !strings.Contains(drafted, "commit: "+recorded) {
+		t.Fatalf("could not put the agent's hash in the file:\n%s", drafted)
+	}
+	if err := os.WriteFile(p, []byte(drafted+"\nClosed the fd in both paths.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runPush(nil); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	log := read(t, ghLog)
+	if !strings.Contains(log, "Fixed in [`"+signed+"`]") {
+		t.Errorf("reply does not quote the signed commit %s:\n%s", signed, log)
+	}
+	if strings.Contains(log, recorded) {
+		t.Errorf("reply still quotes the pre-signing hash %s:\n%s", recorded, log)
+	}
+	// And the box learns it, so a re-pull does not hand the stale hash back to the agent.
+	if got := read(t, p); !strings.Contains(got, "commit: "+signed) {
+		t.Errorf("the file on the box kept the stale hash:\n%s", got)
+	}
+}
+
+// `sand up` is the one command for the Mac's half, so the test is the whole half: an answered
+// thread on the box, unsigned commits on the branch, and nothing done by hand.
+func TestUpSignsPushesAndPosts(t *testing.T) {
+	dir, _ := signRepo(t)
+	mustRun(t, dir, "git", "switch", "--quiet", "-c", "topic")
+	recorded := mustRun(t, dir, "git", "rev-parse", "--short=7", "HEAD")
+	remoteBase, ghLog := harness(t)
+
+	if err := runPull(nil); err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	p := filepath.Join(remoteBase, "o", "r", "pr-42", "c-2043881.md")
+	drafted := strings.Replace(read(t, p), `commit: ""`, "commit: "+recorded, 1)
+	if err := os.WriteFile(p, []byte(drafted+"\nClosed the fd in both paths.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := upCmd() // registering the flags is what sets remote, base and the rest
+	flagPR, flagYes = "42", true
+	t.Cleanup(func() { flagYes = false })
+	out := captureStdout(t)
+	if err := runUp(cmd, nil); err != nil {
+		t.Fatalf("up: %v\n%s", err, out())
+	}
+
+	printed := out()
+	signed := mustRun(t, dir, "git", "rev-parse", "topic")
+	if pushed := mustRun(t, dir, "git", "rev-parse", "origin/topic"); pushed != signed {
+		t.Errorf("origin/topic at %s, local topic at %s", pushed, signed)
+	}
+	for _, want := range []string{
+		"1/4 sign", "topic: 3 commit(s), 3 signed now",
+		"2/4 push", "3/4 verify", "as verified", "4/4 replies", "posted c-2043881.md",
+	} {
+		if !strings.Contains(printed, want) {
+			t.Errorf("output missing %q:\n%s", want, printed)
+		}
+	}
+	if log := read(t, ghLog); !strings.Contains(log, "Fixed in [`"+short(signed)+"`]") {
+		t.Errorf("the posted reply does not quote the signed commit %s:\n%s", short(signed), log)
+	}
+	if got := read(t, p); !strings.Contains(got, "status: sent") {
+		t.Errorf("the thread was not marked sent on the box:\n%s", got)
+	}
+}
+
+// Signing pushes what it rewrote, so step 2 only has work when there was nothing to sign:
+// a branch signed in an earlier round, or by hand, that never reached the remote. That is
+// the case the step exists for, and posting a reply about commits GitHub cannot see is
+// exactly what it prevents.
+func TestUpPushesABranchThatNeededNoSigning(t *testing.T) {
+	dir, _ := signRepo(t)
+	mustRun(t, dir, "git", "switch", "--quiet", "-c", "topic")
+	var signOut strings.Builder
+	if _, err := Sign(SignOpts{Branch: "topic", Remote: "origin", Base: "main", Yes: true,
+		In: strings.NewReader("n\n"), Out: &signOut}); err != nil { // "n" declines the push
+		t.Fatalf("signing without pushing: %v\n%s", err, signOut.String())
+	}
+	if refs := mustRun(t, dir, "git", "for-each-ref", "refs/remotes/origin/topic"); refs != "" {
+		t.Fatalf("setup pushed after all: %q", refs)
+	}
+	harness(t)
+
+	if err := runPull(nil); err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	cmd := upCmd()
+	flagPR, flagYes = "42", true
+	t.Cleanup(func() { flagYes = false })
+	out := captureStdout(t)
+	if err := runUp(cmd, nil); err != nil {
+		t.Fatalf("up: %v\n%s", err, out())
+	}
+
+	printed := out()
+	local := mustRun(t, dir, "git", "rev-parse", "topic")
+	pushed := mustRun(t, dir, "git", "rev-parse", "--verify", "--quiet", "origin/topic")
+	if pushed != local {
+		t.Errorf("origin/topic at %q, local topic at %s\n%s", pushed, local, printed)
+	}
+	for _, want := range []string{"signed already", "origin/topic → " + short(local), "(was absent)"} {
+		if !strings.Contains(printed, want) {
+			t.Errorf("output missing %q:\n%s", want, printed)
+		}
+	}
+}
+
+// The dry run has to be honest about all four steps at once: no rewrite, no push, no post.
+func TestUpDryRunChangesNothing(t *testing.T) {
+	dir, _ := signRepo(t)
+	mustRun(t, dir, "git", "switch", "--quiet", "-c", "topic")
+	before := mustRun(t, dir, "git", "rev-parse", "topic")
+	remoteBase, ghLog := harness(t)
+
+	if err := runPull(nil); err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	p := filepath.Join(remoteBase, "o", "r", "pr-42", "c-2043881.md")
+	if err := os.WriteFile(p, []byte(read(t, p)+"\nClosed the fd.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := upCmd()
+	flagPR, flagYes, flagDryRun = "42", true, true
+	t.Cleanup(func() { flagYes, flagDryRun = false, false })
+	out := captureStdout(t)
+	if err := runUp(cmd, nil); err != nil {
+		t.Fatalf("up --dry-run: %v\n%s", err, out())
+	}
+
+	if after := mustRun(t, dir, "git", "rev-parse", "topic"); after != before {
+		t.Errorf("dry run moved the branch from %s to %s", before, after)
+	}
+	if refs := mustRun(t, dir, "git", "for-each-ref", "refs/remotes/origin/topic"); refs != "" {
+		t.Errorf("dry run pushed: %q", refs)
+	}
+	if log := read(t, ghLog); strings.Contains(log, "/replies") {
+		t.Errorf("dry run posted a reply:\n%s", log)
+	}
+	if printed := out(); !strings.Contains(printed, "would push") {
+		t.Errorf("dry run did not say what it would push:\n%s", printed)
+	}
+}
+
 func TestPushWithNothingPulled(t *testing.T) {
 	harness(t)
 	err := runPush(nil)

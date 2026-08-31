@@ -40,10 +40,9 @@ then asked you the same thing gets the same work.
 3. Commit the fix.
 4. Edit the thread file: write the reply under the `## reply` heading, and put the fixing
    commit's short hash in `commit:` in the front matter.
-5. Repeat for every pending thread, then tell the human to push the branch, run
-   `sand sign <branch>` and then `sand comments push`, on the Mac. Push posts the replies and
-   flips `status: sent`, and refuses outright while any commit on the PR is unsigned. You
-   cannot do any of this from here.
+5. Repeat for every pending thread, then say so. The rest happens on the Mac, with
+   `sand up`: it signs the branch, pushes it, checks GitHub agrees the commits are verified,
+   and posts the replies. You cannot do any of it from here, and you do not need to.
 
 ## What you may edit in a thread file
 
@@ -62,20 +61,21 @@ Name what changed and link the commit that changed it, backticked short hash. No
 what you did instead and why, in one or two sentences. If a thread is `outdated: true` the
 code moved under it, so check the current file before answering.
 
-## Signatures, and why the hash you quote can move
+## Signatures, and the hash you record
 
-Commits made here are unsigned: this box has no keys and is not getting any. They are signed
-on the Mac afterwards with `sand sign <branch>`, which re-creates every commit the branch adds
-with a signature and force-pushes the result. Do not try to sign or rewrite history here.
+Commits made here are unsigned: this box has no keys and is not getting any. They are signed on
+the Mac, which re-creates the commit with a signature and so gives it a new hash. Do not try to
+sign or rewrite history here.
 
-That rewrite changes commit hashes. So a `commit:` you recorded, and a hash quoted in a reply
-already posted by `sand comments push`, will not exist on the remote once the branch is signed.
-Signing has to come first, and `sand comments push` enforces it: if GitHub reports any commit
-on the PR as unverified it refuses to post anything and prints `sand sign <branch>`.
+Record your own hash in `commit:` anyway. The Mac looks the recorded commit up on the pushed
+branch when it posts, and when signing has replaced it, it posts the replacement's hash instead
+(same tree, same subject, new hash). Nothing is expected of you about signing, and re-pulling to
+chase a hash is wasted work.
 
-What that means for you: after the last fix is committed, tell the human to push the branch,
-run `sand sign <branch>`, and only then `sand comments push`. If a hash you recorded in
-`commit:` came from before a signing run, it is stale, so re-pull and record the new one.
+Two things do fall out of it. A commit that never reaches the branch cannot be matched, so the
+reply about it is held back rather than posted with a dead link: commit your fix on the branch
+the PR is for, and do not amend or drop it afterwards. And signing before posting is not
+optional, which is why the Mac runs `sand up` rather than posting on its own.
 
 ## This file
 

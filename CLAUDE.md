@@ -35,15 +35,51 @@ alias, and a machine-specific login is not a thing to hardcode for every machine
 ## Commands
 
 `sand` is where the Mac-side scripts for this workflow are being consolidated, so each one is a
-subcommand rather than a shell file: `comments` (below), `sign`, `skill`, `config` (`init`,
-`get`, `set`).
+subcommand rather than a shell file: `comments` (below), `up`, `sign`, `skill`, `config`
+(`init`, `get`, `set`).
+
+## The whole Mac side: `sand up [pr]`
+
+One command for everything the Mac owes a review round, in the only order that is safe, each
+step verified before the next runs and printed so a watching human can check it:
+
+1. `sign` the branch the PR comes from (whatever is not signed yet).
+2. `push` `--force-with-lease`, then re-read the remote ref to prove it moved. Signing pushes
+   what it rewrote itself, so this step only has work when there was nothing to sign: a branch
+   signed in an earlier round, or by hand, that never reached the remote.
+3. `verify` that GitHub reports every commit of the PR as verified. A failure here is almost
+   always the signing key missing from the GitHub account, so the error says that.
+4. `replies`: `comments push`.
+
+Flags: `--pr`, `--remote`, `--base`, `-y/--yes`, `--dry-run`. The dry run covers all four steps
+at once and changes nothing anywhere. Declining the rewrite at step 1 stops the run rather than
+posting replies about commits that were never signed.
+
+The order is the whole point: a reply quotes a commit hash, signing changes commit hashes, so
+signing has to be finished and pushed and confirmed by GitHub before one reply goes out.
 
 ## Signing: `sand sign [branch]`
 
 The box has no keys, so commits land unsigned and get signed on the Mac. `sand sign` imports the
-branch with `aif`, then re-creates every commit the branch adds over `<remote>/<base>` with
-`git commit-tree -S` under `git filter-branch`, verifies the result and offers to push with
-`--force-with-lease`. Flags: `--remote` (origin), `--base` (main), `--yes`, `--push`, `--dry-run`.
+branch with `aif`, then re-creates the commits the branch adds over `<remote>/<base>` that are
+not signed already, with `git commit-tree -S` under `git filter-branch`, verifies the result and
+offers to push with `--force-with-lease`. Flags: `--remote` (origin), `--base` (main), `--yes`,
+`--push`, `--dry-run`.
+
+- **Only what is unsigned, and what sits on top of it.** Review is a loop, so most runs meet a
+  branch that is already partly signed, and re-signing a commit moves its hash, which kills
+  every reply already posted quoting it. The already-signed commits go to filter-branch as
+  negative revs, so it never sees them. A commit is rewritten when it has no signature or when
+  anything below it in the branch does: its parent hash changes, so its own bytes do.
+  Everything unique to the branch already signed means the run is a no-op, with no recovery
+  branch made. `SignResult` reports total, rewritten and kept, which is what `up` prints.
+- **A signature is the `gpgsig` header, not `%G?`.** `%G?` answers "can this machine verify
+  it", which needs a keyring and a trust config; what decides re-signing is whether the header
+  is there at all.
+- **Verification includes the kept hashes.** After the rewrite, every already-signed commit
+  must still be on the branch, on top of the existing "all signed, count unchanged" checks.
+- **The recovery branch name gets a `-2`, `-3` suffix if taken.** Two runs in the same second
+  are normal in a review loop and the second one must not fail on the first one's name.
 
 - **filter-branch, not rebase.** It replays the original trees with rewritten parents, so merge
   commits survive and no content conflict is possible. A rebase would flatten or stall.
@@ -124,6 +160,15 @@ because `~`, `yes` and `user@host:2222` do not all survive being printed by hand
   everything sent stays a no-op, and `--dry-run` warns instead of failing so the preview works.
 - **Every command that writes anywhere but this Mac takes `--dry-run`:** `comments pull`,
   `comments push`, `sign`. `skill install` and `config init` write only local files.
+- **`push` re-points a `commit:` that signing moved.** The agent on the box commits without a
+  key and records that hash; signing then re-creates the commit, so the recorded hash stops
+  existing exactly when the branch becomes postable, and every earlier round's replies would
+  link to nothing. Before posting, each recorded commit is looked up on `<remote>/<branch>`:
+  on it already, quote it as is; missing but matched by tree and subject, quote the replacement
+  and say so; missing with no match, hold that one reply back and count it failed; unknowable
+  here (no such ref, no such object), warn and post anyway, because a hash this checkout cannot
+  reason about is not evidence that it is wrong. The corrected hash is written back to the box
+  by the front matter rewrite that marks it sent. This is why `push` takes `--remote`.
 - **`push` rewrites only the front matter** of a file it has posted, so the conversation text
   stays byte-identical to what pull wrote.
 

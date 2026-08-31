@@ -53,8 +53,147 @@ func root() *cobra.Command {
 	}
 	c.PersistentFlags().StringVar(&flagHost, "host", "", "sandbox ssh alias or user@host (overrides config)")
 	c.PersistentFlags().StringVar(&flagRemoteDir, "remote-dir", "", "base dir on the sandbox (overrides config)")
-	c.AddCommand(commentsCmd(), configCmd(), signCmd(), skillCmd())
+	c.AddCommand(commentsCmd(), configCmd(), signCmd(), skillCmd(), upCmd())
 	return c
+}
+
+func upCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "up [pr-number|pr-url]",
+		Short: "Sign, push and post the replies: the whole Mac side in one command",
+		Long: "Everything the Mac owes the loop once an agent on the box has answered the\n" +
+			"threads, in order, with each step verified before the next one runs:\n\n" +
+			"  1 sign      the commits on the PR's branch that are not signed yet\n" +
+			"  2 push      --force-with-lease, then check the remote really moved\n" +
+			"  3 verify    GitHub itself reports every commit of the PR as verified\n" +
+			"  4 replies   post the drafted replies, which quote those commits\n\n" +
+			"A step that fails stops the ones after it: a reply that quotes a hash nobody\n" +
+			"has is the damage this order exists to prevent.",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error { return runUp(cmd, args) },
+	}
+	c.Flags().StringVar(&flagPR, "pr", "", "PR number or URL (default: the PR for the current branch)")
+	c.Flags().StringVar(&flagRemote, "remote", "origin", "remote to compare against and push to")
+	c.Flags().StringVar(&flagBase, "base", "main", "base branch on that remote")
+	c.Flags().BoolVarP(&flagYes, "yes", "y", false, "skip the confirmation before rewriting history")
+	c.Flags().BoolVar(&flagDryRun, "dry-run", false, "say what each step would do, change nothing anywhere")
+	return c
+}
+
+// runUp is the second half of the review loop in one command. It is the order that matters:
+// signing rewrites hashes, the replies quote them, so signing has to be finished and pushed
+// and confirmed by GitHub before a single reply goes out.
+func runUp(cmd *cobra.Command, args []string) error {
+	cfg, target, err := setup(args)
+	if err != nil {
+		return err
+	}
+	if err := target.LoadURL(); err != nil {
+		return err
+	}
+	branch := target.Branch
+	if branch == "" {
+		return fmt.Errorf("gh did not say which branch %s#%d comes from", target.Slug(), target.Number)
+	}
+
+	fmt.Printf("PR:      %s#%d %q\n", target.Slug(), target.Number, target.Title)
+	fmt.Printf("Branch:  %s → %s/%s\n", branch, flagRemote, flagBase)
+	fmt.Printf("Replies: %s:%s\n", cfg.Host, target.RemotePath(cfg.RemoteDir))
+	if flagDryRun {
+		fmt.Println("dry run: nothing gets rewritten, pushed or posted")
+	}
+
+	fmt.Println("\n1/4 sign")
+	res, err := Sign(SignOpts{
+		Branch: branch,
+		Remote: flagRemote,
+		Base:   flagBase,
+		Yes:    flagYes,
+		// sign pushes what it rewrote itself; step 2 covers the branch that needed no
+		// rewrite at all and was never pushed.
+		Push:   !flagDryRun,
+		DryRun: flagDryRun,
+		In:     cmd.InOrStdin(),
+		Out:    os.Stdout,
+	})
+	if err != nil {
+		return err
+	}
+	if res.Cancelled {
+		fmt.Println("\nstopped at step 1: nothing signed, so nothing posted")
+		return nil
+	}
+	fmt.Printf("  %s: %d commit(s), %d signed now, %d already signed and unmoved\n",
+		branch, res.Total, res.Rewritten, res.Kept)
+
+	fmt.Println("\n2/4 push")
+	if err := ensurePushed(branch); err != nil {
+		return err
+	}
+
+	fmt.Println("\n3/4 verify on GitHub")
+	unverified, err := UnverifiedCommits(target)
+	if err != nil {
+		return fmt.Errorf("asking GitHub about the signatures: %w", err)
+	}
+	switch {
+	case len(unverified) == 0:
+		fmt.Printf("  GitHub reports every commit of %s#%d as verified\n", target.Slug(), target.Number)
+	case flagDryRun:
+		warn(fmt.Sprintf("GitHub currently reports %d commit(s) as unverified; step 1 is what fixes that",
+			len(unverified)))
+	default:
+		for _, c := range unverified {
+			fmt.Printf("  %s %q — %s\n", short(c.SHA), c.Subject, c.Reason)
+		}
+		return fmt.Errorf("%d commit(s) are signed here but not verified by GitHub, so no reply was posted: "+
+			"the signing key is probably not on the GitHub account (Settings → SSH and GPG keys, as a signing key)",
+			len(unverified))
+	}
+
+	fmt.Println("\n4/4 replies")
+	return runPush(args)
+}
+
+// ensurePushed gets the branch to the remote and proves it landed, rather than trusting that
+// a push that printed nothing did anything. A branch the remote does not have yet is pushed
+// without a lease: there is nothing there to overwrite.
+func ensurePushed(branch string) error {
+	g := gitCmd{out: os.Stdout}
+	local, err := g.capture("rev-parse", branch)
+	if err != nil {
+		return err
+	}
+	ref := flagRemote + "/" + branch
+	remote, _ := g.capture("rev-parse", "--verify", "--quiet", ref)
+
+	if remote == local {
+		fmt.Printf("  %s is already at %s\n", ref, short(local))
+		return nil
+	}
+	if flagDryRun {
+		switch remote {
+		case "":
+			fmt.Printf("  dry run: would push %s to %s as a new branch\n", short(local), flagRemote)
+		default:
+			fmt.Printf("  dry run: would push %s over %s at %s\n", short(local), ref, short(remote))
+		}
+		return nil
+	}
+
+	args := []string{"push", "--force-with-lease", flagRemote, branch}
+	if remote == "" {
+		args = []string{"push", "--set-upstream", flagRemote, branch}
+	}
+	if err := g.run(args...); err != nil {
+		return fmt.Errorf("pushing %s to %s failed, so nothing was posted: %w", branch, flagRemote, err)
+	}
+	after, err := g.capture("rev-parse", "--verify", "--quiet", ref)
+	if err != nil || after != local {
+		return fmt.Errorf("push reported success but %s is at %q, not %s", ref, after, short(local))
+	}
+	fmt.Printf("  %s → %s (was %s)\n", ref, short(local), cmp.Or(short(remote), "absent"))
+	return nil
 }
 
 func signCmd() *cobra.Command {
@@ -175,11 +314,15 @@ func commentsCmd() *cobra.Command {
 		Short: "Post drafted replies from the sandbox back to GitHub",
 		Long: "Reads the thread files back off the sandbox and posts every non-empty reply as a\n" +
 			"threaded reply to the review comment it answers, then marks it sent so a second\n" +
-			"push is a no-op.",
+			"push is a no-op.\n\n" +
+			"The box had no key when it committed, so each reply's `commit:` hash is checked\n" +
+			"against the pushed branch first and re-pointed at the signed commit that replaced\n" +
+			"it. Refuses to post at all while GitHub reports any commit of the PR unverified.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error { return runPush(args) },
 	}
 	push.Flags().StringVar(&flagPR, "pr", "", "PR number or URL (default: the PR for the current branch)")
+	push.Flags().StringVar(&flagRemote, "remote", "origin", "remote whose copy of the branch the commit hashes must match")
 	push.Flags().BoolVar(&flagDryRun, "dry-run", false, "print the replies that would be posted, post nothing")
 
 	c.AddCommand(pull, push)
@@ -486,12 +629,21 @@ func runPush(args []string) error {
 	// Every reply quotes the commit that fixed the thread, and signing the branch rewrites
 	// those hashes, so posting first publishes hashes that are about to stop existing.
 	// Only worth checking when there is something to post.
+	g := gitCmd{out: os.Stdout}
+	branchRef := ""
 	if pendingReplies(files) > 0 {
 		if err := requireSignedCommits(target); err != nil {
 			if !flagDryRun {
 				return err
 			}
 			warn(err.Error())
+		}
+		if target.Branch != "" {
+			branchRef = flagRemote + "/" + target.Branch
+			// The hashes are checked against the pushed branch, so a stale tracking ref
+			// would condemn perfectly good commits. Offline, this fails and the checks
+			// below degrade to "cannot say".
+			_, _ = g.capture("fetch", "--quiet", flagRemote)
 		}
 	}
 
@@ -503,12 +655,30 @@ func runPush(args []string) error {
 			continue
 		}
 
-		body := composeReply(target, t)
+		name := filepath.Base(f)
 		if t.Meta.Commit == "" {
-			warn(fmt.Sprintf("%s: no commit recorded, posting the reply without one", filepath.Base(f)))
+			warn(fmt.Sprintf("%s: no commit recorded, posting the reply without one", name))
+		} else if branchRef != "" {
+			// The box had no key, so what the agent wrote down is the hash of an unsigned
+			// commit that signing has since replaced.
+			switch h, state := commitOnBranch(g, t.Meta.Commit, branchRef); state {
+			case commitMoved:
+				fmt.Printf("%s: signing moved %s to %s\n", name, t.Meta.Commit, h)
+				t.Meta.Commit = h
+			case commitGone:
+				warn(fmt.Sprintf("%s: commit %s is not on %s and nothing there matches it; "+
+					"left pending rather than posting a dead link (re-pull to let the agent recheck)",
+					name, t.Meta.Commit, branchRef))
+				failed++
+				continue
+			case commitUnknown:
+				warn(fmt.Sprintf("%s: cannot check %s against %s from this checkout, posting it as recorded",
+					name, t.Meta.Commit, branchRef))
+			}
 		}
+		body := composeReply(target, t)
 		if flagDryRun {
-			fmt.Printf("--- %s → comment %d (%s)\n%s\n", filepath.Base(f), t.Meta.CommentID, t.Location(), body)
+			fmt.Printf("--- %s → comment %d (%s)\n%s\n", name, t.Meta.CommentID, t.Location(), body)
 			posted++
 			continue
 		}
@@ -519,19 +689,19 @@ func runPush(args []string) error {
 		url, err := Reply(target, t.Meta.CommentID, body)
 		if err != nil {
 			// One bad comment id or one throttle must not cost the rest of the batch.
-			warn(fmt.Sprintf("%s: %v (left pending, safe to re-run)", filepath.Base(f), err))
+			warn(fmt.Sprintf("%s: %v (left pending, safe to re-run)", name, err))
 			failed++
 			continue
 		}
 		posted++
-		fmt.Printf("posted %s (%s) → %s\n", filepath.Base(f), t.Location(), url)
+		fmt.Printf("posted %s (%s) → %s\n", name, t.Location(), url)
 
 		t.Meta.Status = StatusSent
 		t.Meta.RepliedAt = time.Now().Format(time.RFC3339)
 		t.Meta.ReplyURL = url
 		out, err := ReplaceFrontMatter(raw, t.Meta)
 		if err != nil {
-			warn(fmt.Sprintf("%s: posted, but could not mark it sent: %v", filepath.Base(f), err))
+			warn(fmt.Sprintf("%s: posted, but could not mark it sent: %v", name, err))
 			continue
 		}
 		if err := os.WriteFile(f, []byte(out), 0o644); err != nil {
