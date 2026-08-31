@@ -192,7 +192,10 @@ being printed by hand.
   on it already, quote it as is; missing but matched by tree and subject, quote the replacement
   and say so; missing with no match, hold that one reply back and count it failed; unknowable
   here (no such ref, no such object), warn and post anyway, because a hash this checkout cannot
-  reason about is not evidence that it is wrong. The corrected hash is written back to the box
+  reason about is not evidence that it is wrong; matched by more than one commit, hold that reply
+  too, because tree plus subject is an identity claim and a duplicate on the branch (a
+  cherry-pick, a merge that brought a copy back) makes it false, so quoting either is a coin
+  flip. The corrected hash is written back to the box
   by the front matter rewrite that marks it sent. This is why `push` takes `--remote`.
 - **`push` rewrites only the front matter** of a file it has posted, so the conversation text
   stays byte-identical to what pull wrote.

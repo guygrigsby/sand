@@ -709,6 +709,12 @@ func runPush(args []string) error {
 					name, t.Meta.Commit, branchRef))
 				failed++
 				continue
+			case commitAmbiguous:
+				warn(fmt.Sprintf("%s: %s matches more than one commit on %s (%s); left pending rather "+
+					"than quoting a guess (say which in `commit:` and re-run)",
+					name, t.Meta.Commit, branchRef, h))
+				failed++
+				continue
 			case commitUnknown:
 				warn(fmt.Sprintf("%s: cannot check %s against %s from this checkout, posting it as recorded",
 					name, t.Meta.Commit, branchRef))

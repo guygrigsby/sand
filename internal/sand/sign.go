@@ -358,10 +358,11 @@ func (g gitCmd) stream(c *exec.Cmd) error {
 type commitState int
 
 const (
-	commitCurrent commitState = iota // it is on the pushed branch; quote it as is
-	commitMoved                      // signing replaced it; quote the returned hash instead
-	commitGone                       // not on the branch, and nothing on the branch matches it
-	commitUnknown                    // git here cannot say: no such ref, no such object
+	commitCurrent   commitState = iota // it is on the pushed branch; quote it as is
+	commitMoved                        // signing replaced it; quote the returned hash instead
+	commitGone                         // not on the branch, and nothing on the branch matches it
+	commitAmbiguous                    // more than one commit on the branch matches it
+	commitUnknown                      // git here cannot say: no such ref, no such object
 )
 
 // commitOnBranch says which hash a reply should quote. The agent on the box commits without
@@ -371,6 +372,10 @@ const (
 //
 // commitUnknown is deliberately not a failure: a hash this checkout cannot reason about is
 // not evidence that it is wrong, and stalling the loop over it costs more than it saves.
+// Two matches is a different thing and is a failure: tree plus subject is an identity claim,
+// and a duplicated commit (a cherry-pick, a merge that brought a copy back, a branch signed
+// twice) means the claim is false. Quoting either one is a coin flip, and a reply that points
+// a reviewer at the wrong commit is worse than a reply that has not been posted yet.
 func commitOnBranch(g gitCmd, recorded, branchRef string) (string, commitState) {
 	if !g.refExists(branchRef) {
 		return recorded, commitUnknown
@@ -393,13 +398,21 @@ func commitOnBranch(g gitCmd, recorded, branchRef string) (string, commitState) 
 	if err != nil {
 		return recorded, commitUnknown
 	}
+	var matches []string
 	for _, line := range strings.Split(list, "\n") {
 		sha, rest, ok := strings.Cut(line, "\x00")
 		if ok && rest == want {
-			return short(sha), commitMoved
+			matches = append(matches, short(sha))
 		}
 	}
-	return recorded, commitGone
+	switch len(matches) {
+	case 0:
+		return recorded, commitGone
+	case 1:
+		return matches[0], commitMoved
+	default:
+		return strings.Join(matches, ", "), commitAmbiguous
+	}
 }
 
 func (g gitCmd) refExists(ref string) bool {

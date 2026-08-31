@@ -310,6 +310,46 @@ func TestCommitOnBranch(t *testing.T) {
 	}
 }
 
+// Tree plus subject is an identity claim, and two commits on the branch can satisfy it: a
+// cherry-pick, a merge that brought a copy back, a branch signed twice. Guessing between them
+// posts a reviewer a link to the wrong commit, which is the one failure this lookup exists to
+// prevent, so it holds the reply instead.
+func TestCommitOnBranchRefusesToGuessBetweenTwoMatches(t *testing.T) {
+	dir, _ := signRepo(t)
+	g := gitCmd{out: &strings.Builder{}}
+
+	// commit-tree rather than commit: the duplicates need the same tree and subject with
+	// different hashes, and two `git commit`s in the same second produce the same bytes.
+	base := mustRun(t, dir, "git", "rev-parse", "HEAD")
+	tree := mustRun(t, dir, "git", "rev-parse", "HEAD^{tree}")
+	mk := func(parent, date string) string {
+		t.Helper()
+		c := exec.Command("git", "commit-tree", tree, "-p", parent, "-m", "sand: dup me")
+		c.Dir = dir
+		c.Env = append(os.Environ(), "GIT_AUTHOR_DATE="+date, "GIT_COMMITTER_DATE="+date)
+		out, err := c.Output()
+		if err != nil {
+			t.Fatalf("commit-tree: %v", err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	d1 := mk(base, "2026-01-01T00:00:00Z")
+	d2 := mk(d1, "2026-01-02T00:00:00Z")
+	recorded := mk(base, "2026-01-03T00:00:00Z") // never reaches the branch: the box's hash
+	mustRun(t, dir, "git", "update-ref", "refs/heads/feature", d2)
+	mustRun(t, dir, "git", "push", "--quiet", "origin", "feature")
+
+	got, state := commitOnBranch(g, recorded, "origin/feature")
+	if state != commitAmbiguous {
+		t.Fatalf("state = %d, want commitAmbiguous (%d); got hash %q", state, commitAmbiguous, got)
+	}
+	for _, want := range []string{short(d1), short(d2)} {
+		if !strings.Contains(got, want) {
+			t.Errorf("%q does not name the candidate %s", got, want)
+		}
+	}
+}
+
 func TestSignRefusals(t *testing.T) {
 	t.Run("protected branch", func(t *testing.T) {
 		dir, _ := signRepo(t)
