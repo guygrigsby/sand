@@ -26,9 +26,18 @@ rsync, and the Mac is what pushes:
 Both use `--delete`, so a stray edit on the Mac is overwritten rather than left to diverge. Both
 also exclude `.git`: source is what travels, git state is each machine's own. The Mac's is not
 reproducible from the box, since it holds the remotes (`origin` on GitHub, and one pointing back
-at the box), the signing config and the reflog, and the box has no remotes at all. Syncing over
-it deleted the `origin` that `gh repo create` had just made. A fresh Mac therefore starts with a
-`git clone`, not a `make sync`.
+at the box), the pre-push hook, the signing config and the reflog, and the box has no remotes at
+all. Syncing over it deleted the `origin` that `gh repo create` had just made. A fresh Mac
+therefore starts with a `git clone`, not a `make sync`.
+
+Which leaves the commits, and the Mac needs those, not just the files: it is where signing,
+pushing and the merge happen. `make sync` follows the rsync with `git fetch --all`, so the box's
+history arrives as remote-tracking refs of whatever remote the Mac has pointing back at the box.
+It fetches and stops: it does not merge, check out or reset anything, because which branch to
+take and whether it has been signed yet is the Mac's decision, and the rsync has already put the
+files there. `git switch -C <branch> <box-remote>/<branch>` is what makes those files stop
+reading as uncommitted changes. A failed fetch does not fail the sync, since the remote may not
+exist yet and the tailnet may be down, and the files and the install are still worth having.
 
 The `BOX` lookup prefers `$(GO) run . config get host` from the checkout over an installed
 `sand`: `make sync` is what installs the new binary, so the installed one is by definition the
