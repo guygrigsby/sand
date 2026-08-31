@@ -111,6 +111,24 @@ since the file was written and refreshes the comments, so running it twice write
 bytes. It writes no defaulted value, only the keys with their defaults named in comments, so a
 later change to a default still reaches a config that never set it.
 
+## What it will not do
+
+The point of the loop is that a reply on GitHub is evidence: it names a commit, and the commit
+carries a signature. So `sand` fails closed wherever it cannot keep that true.
+
+- No GitHub token ever enters the program. `gh` holds the auth, on the Mac only.
+- The box gets no signing key and never talks to GitHub. The Mac signs and posts, and never
+  edits code. Neither half can do the other's job by accident.
+- `push` refuses to post while GitHub reports any commit of the PR as unverified, and holds back
+  any single reply whose `commit:` it cannot resolve to exactly one commit on the pushed branch.
+- `push` asks GitHub what it has already said on each thread before posting, so an interrupted
+  run re-marks instead of posting twice. If that check cannot be made, it posts nothing.
+- `sign` refuses commits whose author or committer is not your git identity, and shows you the
+  diffstat before it asks.
+- One agent per checkout on the box, under `flock`.
+- Everything that writes anywhere but this Mac takes `--dry-run`: `comments pull`,
+  `comments push`, `sign`, `up`.
+
 ## Development
 
 Edit in this repo, on the box. Not on the Mac, not over ssh into a deploy target.
