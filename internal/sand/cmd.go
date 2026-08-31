@@ -21,6 +21,7 @@ var (
 	flagRemote    string
 	flagBase      string
 	flagYes       bool
+	flagOtherAuth bool
 	flagPush      bool
 	flagAgent     string
 	flagNoAgent   bool
@@ -76,6 +77,8 @@ func upCmd() *cobra.Command {
 	c.Flags().StringVar(&flagRemote, "remote", "origin", "remote to compare against and push to")
 	c.Flags().StringVar(&flagBase, "base", "main", "base branch on that remote")
 	c.Flags().BoolVarP(&flagYes, "yes", "y", false, "skip the confirmation before rewriting history")
+	c.Flags().BoolVar(&flagOtherAuth, "allow-other-authors", false,
+		"sign commits made by someone other than this machine's git identity")
 	c.Flags().BoolVar(&flagDryRun, "dry-run", false, "say what each step would do, change nothing anywhere")
 	return c
 }
@@ -105,10 +108,11 @@ func runUp(cmd *cobra.Command, args []string) error {
 
 	fmt.Println("\n1/4 sign")
 	res, err := Sign(SignOpts{
-		Branch: branch,
-		Remote: flagRemote,
-		Base:   flagBase,
-		Yes:    flagYes,
+		Branch:            branch,
+		Remote:            flagRemote,
+		Base:              flagBase,
+		Yes:               flagYes,
+		AllowOtherAuthors: flagOtherAuth,
 		// sign pushes what it rewrote itself; step 2 covers the branch that needed no
 		// rewrite at all and was never pushed.
 		Push:   !flagDryRun,
@@ -209,13 +213,14 @@ func signCmd() *cobra.Command {
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			o := SignOpts{
-				Remote: flagRemote,
-				Base:   flagBase,
-				Yes:    flagYes,
-				Push:   flagPush,
-				DryRun: flagDryRun,
-				In:     cmd.InOrStdin(),
-				Out:    cmd.OutOrStdout(),
+				Remote:            flagRemote,
+				Base:              flagBase,
+				Yes:               flagYes,
+				Push:              flagPush,
+				DryRun:            flagDryRun,
+				In:                cmd.InOrStdin(),
+				Out:               cmd.OutOrStdout(),
+				AllowOtherAuthors: flagOtherAuth,
 			}
 			if len(args) > 0 {
 				o.Branch = args[0]
@@ -227,6 +232,8 @@ func signCmd() *cobra.Command {
 	c.Flags().StringVar(&flagRemote, "remote", "origin", "remote to compare against and push to")
 	c.Flags().StringVar(&flagBase, "base", "main", "base branch on that remote")
 	c.Flags().BoolVarP(&flagYes, "yes", "y", false, "skip the confirmation before rewriting")
+	c.Flags().BoolVar(&flagOtherAuth, "allow-other-authors", false,
+		"sign commits made by someone other than this machine's git identity")
 	c.Flags().BoolVar(&flagPush, "push", false, "push with --force-with-lease once verified, without asking")
 	c.Flags().BoolVar(&flagDryRun, "dry-run", false, "show what would be signed, rewrite nothing and push nothing")
 	return c

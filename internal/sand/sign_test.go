@@ -310,6 +310,65 @@ func TestCommitOnBranch(t *testing.T) {
 	}
 }
 
+// A signature says the signer vouches for the commit. `aif` imports whatever the box's branch
+// holds, so a merge of another branch, a cherry-pick or an agent with a different git config
+// puts someone else's commits in front of this Mac's key. --yes must not wave that through: it
+// answers a question about known work, it does not widen what the key attests to.
+func TestSignRefusesSomeoneElsesCommits(t *testing.T) {
+	dir, _ := signRepo(t)
+
+	c := exec.Command("git", "commit", "--quiet", "--allow-empty", "-m", "colleague: their work")
+	c.Dir = dir
+	c.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=Someone Else", "GIT_AUTHOR_EMAIL=else@example.invalid",
+		"GIT_COMMITTER_NAME=Someone Else", "GIT_COMMITTER_EMAIL=else@example.invalid")
+	if out, err := c.CombinedOutput(); err != nil {
+		t.Fatalf("commit: %v\n%s", err, out)
+	}
+	before := mustRun(t, dir, "git", "rev-parse", "HEAD")
+
+	var out strings.Builder
+	o := signOpts(&out, "y\n") // Yes: true, so this is the flag that must not help
+	if _, err := Sign(o); err == nil {
+		t.Fatalf("signed someone else's commit\n%s", out.String())
+	} else if !strings.Contains(err.Error(), "else@example.invalid") {
+		t.Errorf("error does not name who made it: %v", err)
+	}
+	if after := mustRun(t, dir, "git", "rev-parse", "HEAD"); after != before {
+		t.Errorf("history moved anyway: %s → %s", before, after)
+	}
+	if backups := mustRun(t, dir, "git", "branch", "--list", "feature-before-signing-*"); backups != "" {
+		t.Errorf("refusal left a recovery branch: %q", backups)
+	}
+
+	// The operator who does vouch for it says so, and then it signs.
+	o.AllowOtherAuthors = true
+	res, err := Sign(o)
+	if err != nil {
+		t.Fatalf("--allow-other-authors: %v\n%s", err, out.String())
+	}
+	if res.Rewritten != 4 {
+		t.Errorf("signed %d commit(s), want 4", res.Rewritten)
+	}
+}
+
+// The operator is being asked to vouch for work done on another machine, so the prompt has to
+// show more than hashes and subject lines.
+func TestSignShowsWhatItAttestsTo(t *testing.T) {
+	signRepo(t)
+	var out strings.Builder
+	o := signOpts(&out, "")
+	o.DryRun, o.Yes = true, false
+	if _, err := Sign(o); err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	for _, want := range []string{"attests to", "a.txt", "b.txt", "2 files changed"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("no %q in the output:\n%s", want, out.String())
+		}
+	}
+}
+
 // Tree plus subject is an identity claim, and two commits on the branch can satisfy it: a
 // cherry-pick, a merge that brought a copy back, a branch signed twice. Guessing between them
 // posts a reviewer a link to the wrong commit, which is the one failure this lookup exists to

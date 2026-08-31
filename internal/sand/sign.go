@@ -44,6 +44,10 @@ type SignOpts struct {
 	DryRun bool // run the checks, show what would be signed, rewrite nothing
 	In     io.Reader
 	Out    io.Writer
+
+	// AllowOtherAuthors signs commits whose author or committer is not this machine's git
+	// identity. Off by default: see checkSigningIdentity.
+	AllowOtherAuthors bool
 }
 
 // SignResult is what a run did. `up` reports it step by step, and a caller can tell an
@@ -154,6 +158,22 @@ func Sign(o SignOpts) (SignResult, error) {
 	fmt.Fprintf(o.Out, "Commit topology, including merges, will be preserved.\n\n")
 	if err := g.run("log", "--graph", "--format=%h  %G?  %s", head, "--not", base); err != nil {
 		return res, err
+	}
+
+	// A signature is a statement about content, and until now the operator was shown hashes
+	// and subject lines: the summary of work an agent did on another machine, not the work.
+	// The diffstat is the cheapest thing that answers "what am I putting my name on".
+	fmt.Fprintf(o.Out, "\nWhat the signature attests to, %s..%s:\n", base, short(head))
+	if err := g.run("diff", "--stat", base+"..HEAD"); err != nil {
+		return res, err
+	}
+
+	// Before the recovery branch and before the prompt: a refusal is not something to make
+	// the operator answer a question about first.
+	if !o.AllowOtherAuthors {
+		if err := checkSigningIdentity(g, commits, dirty); err != nil {
+			return res, err
+		}
 	}
 	if o.DryRun {
 		fmt.Fprintf(o.Out, "\ndry run: history not rewritten, nothing pushed to %s\n", o.Remote)
@@ -283,6 +303,50 @@ func splitBySigning(commits []branchCommit) (dirty, clean []string) {
 		dirty = append(dirty, c.SHA)
 	}
 	return dirty, clean
+}
+
+// checkSigningIdentity refuses to put this machine's key on a commit somebody else made.
+// `aif` imports whatever the box's branch holds, and a merge of another branch, a cherry-pick
+// or an agent with a different git config all put commits into the branch-unique set that this
+// operator never wrote. filter-branch keeps their author and committer, so the result reads
+// "written by them, vouched for by you", which is a claim nobody made on purpose.
+//
+// It runs whatever `--yes` says: that flag exists to skip a question about work the operator
+// already knows about, not to widen what their key attests to. Only the commits being rewritten
+// are checked; the already-signed ones keep whatever signature they arrived with.
+func checkSigningIdentity(g gitCmd, commits []branchCommit, dirty []string) error {
+	me, err := g.capture("config", "user.email")
+	if err != nil || me == "" {
+		return fmt.Errorf("no git user.email is configured, so there is no identity to sign as")
+	}
+	rewriting := make(map[string]bool, len(dirty))
+	for _, sha := range dirty {
+		rewriting[sha] = true
+	}
+
+	var lines []string
+	for _, c := range commits {
+		if !rewriting[c.SHA] {
+			continue
+		}
+		for _, f := range []struct{ field, email string }{
+			{"author", c.Author}, {"committer", c.Committer},
+		} {
+			if !strings.EqualFold(f.email, me) {
+				who := f.email
+				if who == "" {
+					who = "(none)"
+				}
+				lines = append(lines, fmt.Sprintf("  %s  %s %s", short(c.SHA), f.field, who))
+			}
+		}
+	}
+	if len(lines) == 0 {
+		return nil
+	}
+	return fmt.Errorf("refusing to sign as %s: these commits were made by someone else, and the "+
+		"signature would say you vouch for them\n%s\ndrop them from the branch, or pass "+
+		"--allow-other-authors if you do vouch for them", me, strings.Join(lines, "\n"))
 }
 
 func shortList(shas []string, max int) string {
@@ -432,9 +496,11 @@ func (g gitCmd) checkClean() error {
 
 // branchCommit is one commit the branch adds over the base.
 type branchCommit struct {
-	SHA     string
-	Parents []string
-	Signed  bool
+	SHA       string
+	Parents   []string
+	Signed    bool
+	Author    string // email, for the identity check
+	Committer string // email
 }
 
 // branchCommits lists them oldest first, with their parents and whether they already carry a
@@ -457,9 +523,33 @@ func (g gitCmd) branchCommits(rev, base string) ([]branchCommit, error) {
 		if err != nil {
 			return nil, err
 		}
-		commits = append(commits, branchCommit{SHA: f[0], Parents: f[1:], Signed: hasSignature(raw)})
+		commits = append(commits, branchCommit{
+			SHA: f[0], Parents: f[1:], Signed: hasSignature(raw),
+			Author: headerEmail(raw, "author"), Committer: headerEmail(raw, "committer"),
+		})
 	}
 	return commits, nil
+}
+
+// headerEmail reads the address out of a commit header field ("author", "committer"). Header
+// only, like hasSignature: a message line beginning "author " is text, not an identity.
+func headerEmail(raw, field string) string {
+	for _, line := range strings.Split(raw, "\n") {
+		if line == "" {
+			return ""
+		}
+		v, ok := strings.CutPrefix(line, field+" ")
+		if !ok {
+			continue
+		}
+		_, rest, ok := strings.Cut(v, "<")
+		if !ok {
+			return ""
+		}
+		email, _, _ := strings.Cut(rest, ">")
+		return email
+	}
+	return ""
 }
 
 // hasSignature looks only at the commit header, so a message quoting "gpgsig" cannot pass

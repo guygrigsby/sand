@@ -74,6 +74,12 @@ Commits made here are unsigned: this box has no keys and is not getting any. The
 the Mac, which re-creates the commit with a signature and so gives it a new hash. Do not try to
 sign or rewrite history here.
 
+Commit as yourself, meaning this box's configured `user.name` and `user.email`. Never set
+`GIT_AUTHOR_*` or `GIT_COMMITTER_*`, never `--author`, and do not merge or cherry-pick anyone
+else's commits onto the branch. The Mac refuses to sign a commit whose author or committer is
+not its own identity, because its signature would then say it vouches for work it did not do,
+and that refusal stops the whole round: no replies get posted until a human sorts it out.
+
 Record your own hash in `commit:` anyway. The Mac looks the recorded commit up on the pushed
 branch when it posts, and when signing has replaced it, it posts the replacement's hash instead
 (same tree, same subject, new hash). Nothing is expected of you about signing, and re-pulling to

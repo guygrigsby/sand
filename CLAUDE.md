@@ -51,7 +51,7 @@ step verified before the next runs and printed so a watching human can check it:
    always the signing key missing from the GitHub account, so the error says that.
 4. `replies`: `comments push`.
 
-Flags: `--pr`, `--remote`, `--base`, `-y/--yes`, `--dry-run`. The dry run covers all four steps
+Flags: `--pr`, `--remote`, `--base`, `-y/--yes`, `--allow-other-authors`, `--dry-run`. The dry run covers all four steps
 at once and changes nothing anywhere. Declining the rewrite at step 1 stops the run rather than
 posting replies about commits that were never signed.
 
@@ -64,7 +64,7 @@ The box has no keys, so commits land unsigned and get signed on the Mac. `sand s
 branch with `aif`, then re-creates the commits the branch adds over `<remote>/<base>` that are
 not signed already, with `git commit-tree -S` under `git filter-branch`, verifies the result and
 offers to push with `--force-with-lease`. Flags: `--remote` (origin), `--base` (main), `--yes`,
-`--push`, `--dry-run`.
+`--push`, `--dry-run`, `--allow-other-authors`.
 
 - **Only what is unsigned, and what sits on top of it.** Review is a loop, so most runs meet a
   branch that is already partly signed, and re-signing a commit moves its hash, which kills
@@ -89,6 +89,21 @@ offers to push with `--force-with-lease`. Flags: `--remote` (origin), `--base` (
 - **Verification comes after it:** every branch-unique commit must carry a `gpgsig` header and the
   commit count must be unchanged, or nothing is pushed. A recovery branch
   (`<branch>-before-signing-<timestamp>`) is made before the rewrite and kept afterwards.
+- **Refuses commits this machine did not make.** A signature says the signer vouches for the
+  commit, and `aif` imports whatever the box's branch holds: a merge of another branch, a
+  cherry-pick, an agent with a different git config all put someone else's commits in front of
+  the key. filter-branch keeps their author and committer, so the result would read "written by
+  them, vouched for by you". Every commit being rewritten must have `user.email` as both author
+  and committer, or the run stops before the recovery branch, naming them.
+  `--allow-other-authors` is the way to say you do vouch for them. Deliberately not covered by
+  `--yes`: that flag skips a question about work the operator already knows about, it does not
+  widen what their key attests to. Only the commits being rewritten are checked, since the kept
+  ones keep whatever signature they arrived with. skill.md tells the box agent to commit as
+  itself for this reason.
+- **The prompt shows the diffstat, not just the subjects.** The operator is being asked to
+  attest to work another machine did, and hashes plus subject lines are a summary written by the
+  thing being vouched for. `git diff --stat <base>..HEAD` is the cheapest answer to "what am I
+  putting my name on", and it prints in the dry run too.
 - **Both prompts read one stdin through one reader.** A `bufio.Reader` per question swallows the
   next answer, which silently turned a "yes, push" into "not pushed" (`sign_test.go` covers it).
 - **Signing changes hashes.** A hash already quoted in a posted reply stops existing upstream, so
