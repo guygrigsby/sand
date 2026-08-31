@@ -1,6 +1,5 @@
 BIN := sand
 GO ?= go
-PREFIX ?= $(HOME)
 
 .PHONY: build test lint mac check install redeploy ship sync clean
 
@@ -20,9 +19,9 @@ mac:
 
 check: lint test build mac
 
-install: build
-	install -d $(PREFIX)/bin
-	install -m 0755 build/$(BIN) $(PREFIX)/bin/$(BIN)
+# GOBIN, or ~/go/bin.
+install:
+	$(GO) install .
 
 redeploy: install
 
