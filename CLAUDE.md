@@ -54,9 +54,19 @@ file if you want to change either; `sand config` prints it.
 
 `skills/sand-comments/SKILL.md` teaches an agent on the box how to answer the pulled threads:
 where the files are, that only `## reply` and `commit:` are its to edit, and that push happens
-on the Mac. It is the canonical copy; `make skills` (on the box) symlinks it into
-`~/.claude/skills/` and `~/.pi/agent/skills/`, which is why both harnesses read one file.
-Edit it here, never the symlinks.
+on the Mac.
+
+Install it with `sand skill install` (or `make skills`), run on the box from anywhere in this
+checkout. It symlinks the directory into `~/.claude/skills/` and `~/.pi/agent/skills/`, so both
+harnesses read the one file in the repo. Claude Code does not read `~/.agents/skills/`, which pi
+does, so there is no single directory that covers both. Edit the repo copy, never a symlink; a
+harness only picks up changes on its next start.
+
+**Every change to this repo updates the skill in the same commit.** The skill is the only thing
+telling an agent on the box how the loop works, and the box cannot check the source of a tool it
+never runs. If a change moves a path, renames a field, changes what `push` reads, or adds a
+command, the skill says so before the change lands. If a change genuinely does not touch the box
+side, say that in the commit message rather than leaving it unsaid.
 
 ## Working on it
 

@@ -17,6 +17,7 @@ var (
 	flagPR        string
 	flagDryRun    bool
 	flagAll       bool
+	flagSource    string
 )
 
 // betweenPosts is a base courtesy delay between reply POSTs. The replies endpoint sends
@@ -39,12 +40,55 @@ func root() *cobra.Command {
 			"Today that means PR review comments: `sand comments pull` puts them on the box\n" +
 			"as markdown for an agent to address, `sand comments push` posts the replies back\n" +
 			"to the exact review comments they answer.",
-		SilenceUsage: true,
+		// Execute prints the error itself, prefixed; cobra printing it too says it twice.
+		SilenceUsage:  true,
+		SilenceErrors: true,
 	}
 	c.PersistentFlags().StringVar(&flagHost, "host", "", "sandbox ssh alias or user@host (overrides config)")
 	c.PersistentFlags().StringVar(&flagRemoteDir, "remote-dir", "", "base dir on the sandbox (overrides config)")
-	c.AddCommand(commentsCmd(), configCmd())
+	c.AddCommand(commentsCmd(), configCmd(), skillCmd())
 	return c
+}
+
+func skillCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "skill",
+		Short: "Install the box-side agent skill",
+	}
+	install := &cobra.Command{
+		Use:   "install",
+		Short: "Point the agent harnesses at this repo's skill",
+		Long: "Run on the box, from anywhere in the sand checkout. Symlinks\n" +
+			"skills/" + skillName + " into ~/.claude/skills and ~/.pi/agent/skills, so both\n" +
+			"harnesses read the one file in the repo and editing it here is the whole update.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error { return runSkillInstall() },
+	}
+	install.Flags().StringVar(&flagSource, "source", "", "skill directory to link (default: the one in the checkout)")
+	c.AddCommand(install)
+	return c
+}
+
+func runSkillInstall() error {
+	source := flagSource
+	if source == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		if source, err = FindSkillSource(cwd); err != nil {
+			return err
+		}
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	links, err := InstallSkill(home, source)
+	for _, l := range links {
+		fmt.Println(l, "->", source)
+	}
+	return err
 }
 
 func commentsCmd() *cobra.Command {

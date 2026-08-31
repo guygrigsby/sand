@@ -39,9 +39,7 @@ sync:
 
 # One skill, both harnesses on the box read it. Run on the box, not the Mac.
 skills:
-	@for d in $(HOME)/.claude/skills $(HOME)/.pi/agent/skills; do \
-		mkdir -p $$d && ln -sfn $(CURDIR)/skills/sand-comments $$d/sand-comments && echo "$$d/sand-comments"; \
-	done
+	$(GO) run . skill install
 
 clean:
 	rm -rf build

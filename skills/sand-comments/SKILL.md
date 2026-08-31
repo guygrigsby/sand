@@ -51,6 +51,13 @@ Name what changed and link the commit that changed it, backticked short hash. No
 what you did instead and why, in one or two sentences. If a thread is `outdated: true` the
 code moved under it, so check the current file before answering.
 
+## This file
+
+It is a symlink to `skills/sand-comments/SKILL.md` in the sand checkout on this box, so the
+repo copy is the one to edit and every change to sand updates it in the same commit. If the
+link is missing after a fresh checkout, `sand skill install` from inside the checkout puts it
+back for both harnesses.
+
 ## Multiple PRs
 
 One directory per PR, so `~/.sand/*/*/pr-*/index.md` is the list of what has been pulled.
