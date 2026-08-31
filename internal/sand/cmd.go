@@ -201,7 +201,35 @@ func configCmd() *cobra.Command {
 			return nil
 		},
 	}
-	c.AddCommand(init)
+	set := &cobra.Command{
+		Use:   "set <key> <value> [<key> <value>...]",
+		Short: "Set config values, creating the file if needed",
+		Long: "Sets any of: " + strings.Join(ConfigKeys(), ", ") + ".\n\n" +
+			"Rewrites the whole file from the values it holds, so the comments stay and every\n" +
+			"key it does not mention keeps what it had. An unknown key is an error.",
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) < 2 || len(args)%2 != 0 {
+				return fmt.Errorf("want key/value pairs, got %d argument(s)", len(args))
+			}
+			return nil
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var pairs [][2]string
+			for i := 0; i < len(args); i += 2 {
+				pairs = append(pairs, [2]string{args[i], args[i+1]})
+			}
+			p, err := Set(pairs)
+			if err != nil {
+				return err
+			}
+			for _, kv := range pairs {
+				fmt.Printf("%s: %s\n", kv[0], kv[1])
+			}
+			fmt.Println("wrote", p)
+			return nil
+		},
+	}
+	c.AddCommand(init, set)
 	return c
 }
 

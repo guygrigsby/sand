@@ -21,7 +21,7 @@ Both use `--delete`, so a stray edit on the Mac is overwritten rather than left 
 ## Commands
 
 `sand` is where the Mac-side scripts for this workflow are being consolidated, so each one is a
-subcommand rather than a shell file: `comments` (below), `sign`, `skill`, `config`.
+subcommand rather than a shell file: `comments` (below), `sign`, `skill`, `config` (`init`, `set`).
 
 ## Signing: `sand sign [branch]`
 
@@ -59,8 +59,15 @@ PR defaults to the one for the Mac's current branch; a number or a PR URL overri
 
 Defaults are `guy-llm-sandbox` and `~/.sand`, so no config is needed to use it. Override in
 `~/.config/sand/config.yaml` (`host`, `remote_dir`), or with `--host` / `--remote-dir`, or
-`SAND_HOST` / `SAND_REMOTE_DIR`, in that order of precedence. `sand config init` writes the
-file if you want to change either; `sand config` prints it.
+`SAND_HOST` / `SAND_REMOTE_DIR`, in that order of precedence. `sand config` prints the file,
+`sand config init` writes a starter one, `sand config set <key> <value>...` sets any key.
+
+`set` renders the whole file from the struct: the keys, their order and the settable list all
+come from `Config`'s yaml tags (`configFields`), with the per-key comments in `configDoc`, so a
+new config field is settable and documented without touching the command. It writes only what
+the file already said plus what you asked for, never a defaulted value, so a later change to
+`defaultRemoteDir` still reaches a config that never set it. Values go through `yaml.Marshal`,
+because `~`, `yes` and `user@host:2222` do not all survive being printed by hand.
 
 ### Things that are the way they are on purpose
 
