@@ -30,6 +30,17 @@ type Target struct {
 
 func (t Target) Slug() string { return t.Owner + "/" + t.Repo }
 
+type issue struct {
+	Owner  string
+	Repo   string
+	Number int
+	Title  string
+	URL    string
+	Body   string
+}
+
+func (i issue) Slug() string { return i.Owner + "/" + i.Repo }
+
 // Review is a review summary body (the text submitted with an approval or a
 // changes-requested). Read-only context: GitHub has no in-thread reply for it.
 type Review struct {
@@ -50,15 +61,10 @@ func ResolveTarget(arg string) (Target, error) {
 		return Target{Owner: m[1], Repo: strings.TrimSuffix(m[2], ".git"), Number: n}, nil
 	}
 
-	var repo struct{ NameWithOwner string }
-	if err := ghJSON(&repo, "repo", "view", "--json", "nameWithOwner"); err != nil {
-		return Target{}, fmt.Errorf("not in a GitHub repo checkout (%w)", err)
+	t, err := currentRepo()
+	if err != nil {
+		return Target{}, err
 	}
-	owner, name, ok := strings.Cut(repo.NameWithOwner, "/")
-	if !ok {
-		return Target{}, fmt.Errorf("unexpected repo name %q from gh", repo.NameWithOwner)
-	}
-	t := Target{Owner: owner, Repo: name}
 
 	if arg != "" {
 		n, err := strconv.Atoi(arg)
@@ -81,6 +87,62 @@ func ResolveTarget(arg string) (Target, error) {
 	}
 	t.Number, t.Branch = pr.Number, pr.HeadRefName
 	return t, nil
+}
+
+func currentRepo() (Target, error) {
+	var repo struct{ NameWithOwner string }
+	if err := ghJSON(&repo, "repo", "view", "--json", "nameWithOwner"); err != nil {
+		return Target{}, fmt.Errorf("not in a GitHub repo checkout (%w)", err)
+	}
+	owner, name, ok := strings.Cut(repo.NameWithOwner, "/")
+	if !ok {
+		return Target{}, fmt.Errorf("unexpected repo name %q from gh", repo.NameWithOwner)
+	}
+	return Target{Owner: owner, Repo: name}, nil
+}
+
+func currentBranchPR() (Target, bool, error) {
+	t, err := currentRepo()
+	if err != nil {
+		return Target{}, false, err
+	}
+	branch := currentBranch()
+	var prs []struct {
+		Number      int    `json:"number"`
+		Title       string `json:"title"`
+		URL         string `json:"url"`
+		HeadRefName string `json:"headRefName"`
+	}
+	if err := ghJSON(&prs, "pr", "list", "--repo", t.Slug(), "--head", branch, "--state", "open",
+		"--limit", "2", "--json", "number,title,url,headRefName"); err != nil {
+		return Target{}, false, err
+	}
+	if len(prs) == 0 {
+		t.Branch = branch
+		return t, false, nil
+	}
+	if len(prs) > 1 {
+		return Target{}, false, fmt.Errorf("more than one open PR for branch %q in %s", branch, t.Slug())
+	}
+	pr := prs[0]
+	t.Number, t.Title, t.URL, t.Branch = pr.Number, pr.Title, pr.URL, pr.HeadRefName
+	return t, true, nil
+}
+
+func fetchIssue(number int) (issue, error) {
+	t, err := currentRepo()
+	if err != nil {
+		return issue{}, err
+	}
+	var got struct {
+		Title string `json:"title"`
+		URL   string `json:"url"`
+		Body  string `json:"body"`
+	}
+	if err := ghJSON(&got, "issue", "view", strconv.Itoa(number), "--repo", t.Slug(), "--json", "title,url,body"); err != nil {
+		return issue{}, err
+	}
+	return issue{Owner: t.Owner, Repo: t.Repo, Number: number, Title: got.Title, URL: got.URL, Body: got.Body}, nil
 }
 
 // currentBranch is for error messages only, so a failure to read it is not worth

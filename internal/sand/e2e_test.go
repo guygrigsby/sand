@@ -23,10 +23,31 @@ case "$*" in
     printf '{"html_url":"https://github.com/o/r/pull/42#discussion_r999"}\n'
     ;;
   *"repo view"*)  echo '{"nameWithOwner":"o/r"}' ;;
+  *"issue view"*) echo '{"title":"Fix the thing, safely!","url":"https://github.com/o/r/issues/42","body":"The fd leaks."}' ;;
   *"/commits?"*)  cat "$GH_COMMITS" ;;
   *"api user"*)   echo guy ;;
   *graphql*)      cat "$GH_FIXTURE" ;;
-  *"pr view"*)    echo '{"number":42,"url":"https://github.com/o/r/pull/42","title":"Fix the thing","headRefName":"topic"}' ;;
+  *"pr create"*)
+    while [ "$1" ]; do
+      if [ "$1" = --body-file ]; then cat "$2" > "$GH_PR_BODY"; break; fi
+      shift
+    done
+    touch "$GH_CREATED"
+    echo 'https://github.com/o/r/pull/42'
+    ;;
+  *"pr list"*)
+    if [ "$GH_PR_MISSING" = 1 ] && [ ! -e "$GH_CREATED" ]; then echo '[]';
+    else echo '[{"number":42,"url":"https://github.com/o/r/pull/42","title":"Fix the thing","headRefName":"topic"}]'; fi
+    ;;
+  *"pr view"*)
+    if [ "$GH_PR_MISSING" = 1 ] && [ ! -e "$GH_CREATED" ]; then
+      echo 'no pull requests found' >&2
+      exit 1
+    fi
+    branch=topic
+    [ "$GH_PR_MISSING" = 1 ] && branch=guy/42-fix-the-thing
+    printf '{"number":42,"url":"https://github.com/o/r/pull/42","title":"Fix the thing","headRefName":"%s"}\n' "$branch"
+    ;;
   *) echo "fake gh: unhandled: $*" >&2; exit 1 ;;
 esac
 `
@@ -106,6 +127,8 @@ func harness(t *testing.T) (remoteBase, ghLog string) {
 	t.Setenv("GH_LOG", ghLog)
 	t.Setenv("GH_FIXTURE", fixturePath)
 	t.Setenv("GH_COMMITS", commitsPath)
+	t.Setenv("GH_CREATED", filepath.Join(dir, "pr-created"))
+	t.Setenv("GH_PR_BODY", filepath.Join(dir, "pr-body"))
 	t.Setenv("HOME", dir) // keep any real ~/.config/sand out of it
 
 	flagHost = "box"
@@ -131,6 +154,37 @@ func read(t *testing.T, p string) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+func TestNewCreatesIssueWorkspaceAndBranch(t *testing.T) {
+	dir, remote := signRepo(t)
+	mustRun(t, dir, "git", "switch", "--quiet", "main")
+	remoteBase, _ := harness(t)
+	boxRepo := filepath.Join(os.Getenv("HOME"), "projects", "r")
+	if err := os.MkdirAll(filepath.Dir(boxRepo), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, filepath.Dir(boxRepo), "git", "clone", "--quiet", remote, boxRepo)
+	flagBase = "main"
+	t.Cleanup(func() { flagBase = "" })
+
+	if err := runNew([]string{"42"}); err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	branch := "guy/42-fix-the-thing-safely"
+	if got := mustRun(t, dir, "git", "branch", "--show-current"); got != branch {
+		t.Errorf("Mac branch %q, want %q", got, branch)
+	}
+	if got := mustRun(t, boxRepo, "git", "branch", "--show-current"); got != branch {
+		t.Errorf("box branch %q, want %q", got, branch)
+	}
+	issueDir := filepath.Join(remoteBase, "o", "r", "issue-42")
+	for _, want := range []string{"# Fix the thing, safely!", "https://github.com/o/r/issues/42", "The fd leaks."} {
+		if got := read(t, filepath.Join(issueDir, "issue.md")); !strings.Contains(got, want) {
+			t.Errorf("issue.md missing %q:\n%s", want, got)
+		}
+	}
 }
 
 func TestPullThenPush(t *testing.T) {
@@ -603,6 +657,67 @@ func TestPushRepointsTheHashSigningMoved(t *testing.T) {
 
 // `sand up` is the one command for the Mac's half, so the test is the whole half: an answered
 // thread on the box, unsigned commits on the branch, and nothing done by hand.
+func TestPushAliasesUp(t *testing.T) {
+	cmd, _, err := root().Find([]string{"push"})
+	if err != nil || cmd.Name() != "up" {
+		t.Fatalf("push resolved to %v, %v", cmd, err)
+	}
+}
+
+func TestUpRequiresDescriptionBeforeSigning(t *testing.T) {
+	dir, _ := signRepo(t)
+	mustRun(t, dir, "git", "switch", "--quiet", "-c", "guy/42-fix-the-thing-safely")
+	before := mustRun(t, dir, "git", "rev-parse", "HEAD")
+	harness(t)
+	t.Setenv("GH_PR_MISSING", "1")
+
+	cmd := upCmd()
+	flagPR, flagYes = "", true
+	t.Cleanup(func() { flagYes = false })
+	err := runUp(cmd, nil)
+	if err == nil || !strings.Contains(err.Error(), "pr-description.md") {
+		t.Fatalf("want missing description error, got %v", err)
+	}
+	if after := mustRun(t, dir, "git", "rev-parse", "HEAD"); after != before {
+		t.Errorf("signed before validating the description: %s became %s", before, after)
+	}
+}
+
+func TestUpCreatesMissingPR(t *testing.T) {
+	dir, _ := signRepo(t)
+	mustRun(t, dir, "git", "switch", "--quiet", "-c", "guy/42-fix-the-thing-safely")
+	remoteBase, ghLog := harness(t)
+	prDir := filepath.Join(remoteBase, "o", "r", "issue-42")
+	if err := os.MkdirAll(prDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(prDir, "pr-description.md"), []byte("Fix the thing without leaking the fd.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GH_PR_MISSING", "1")
+
+	cmd := upCmd()
+	flagPR, flagYes = "", true
+	t.Cleanup(func() { flagYes = false })
+	out := captureStdout(t)
+	if err := runUp(cmd, nil); err != nil {
+		t.Fatalf("up: %v\n%s", err, out())
+	}
+
+	log := read(t, ghLog)
+	for _, want := range []string{"pr", "create", "--head", "guy/42-fix-the-thing-safely", "--body-file"} {
+		if !strings.Contains(log, want) {
+			t.Errorf("gh log missing %q:\n%s", want, log)
+		}
+	}
+	if got := read(t, os.Getenv("GH_PR_BODY")); got != "Fix the thing without leaking the fd.\n" {
+		t.Errorf("PR body %q", got)
+	}
+	if !strings.Contains(out(), "opened https://github.com/o/r/pull/42") {
+		t.Errorf("output did not report the new PR:\n%s", out())
+	}
+}
+
 func TestUpSignsPushesAndPosts(t *testing.T) {
 	dir, _ := signRepo(t)
 	mustRun(t, dir, "git", "switch", "--quiet", "-c", "topic")

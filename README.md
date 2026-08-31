@@ -59,11 +59,20 @@ build copy, so never edit the Mac's copy, it gets overwritten.
 
 ## Use
 
-Everything defaults the PR to the one for the current branch. A number or a PR URL overrides.
+Start an issue from the Mac:
+
+    sand new 1532                 # fetch issue, create its box data dir and switch both checkouts
+
+This writes `issue.md` under `<remote_dir>/<owner>/<repo>/issue-1532/` and creates
+`guy/1532-<issue-title>` from `origin/main` on the Mac and box. The box agent writes
+`pr-description.md` beside the issue before handoff.
+
+Everything else defaults the PR to the one for the current branch. A number or a PR URL overrides.
 
     sand comments pull            # threads to the box, agent starts, output streams back
     sand comments pull --no-agent # just write the files
-    sand up                       # sign, push, verify, post the replies
+    sand up                       # sign, push, open a missing PR, verify, post replies
+    sand push                     # alias for sand up
     sand up --dry-run             # all four steps, changes nothing anywhere
 
 Finer grained, if you want the steps apart:
@@ -78,6 +87,10 @@ committer is not your git identity: your signature would be vouching for someone
 One agent per repo checkout on the box, enforced with `flock` there: a second `pull` for
 another PR of the same repo refuses to start one while the first is working, rather than let
 two agents edit one tree. `--no-agent` writes the files and leaves it alone.
+
+With no PR for the current `guy/<issue>-...` branch, `up` reads the box-authored
+`issue-<n>/pr-description.md` after signing and pushing, opens the PR, then verifies it. Missing
+or empty prose is a stop rather than a generated body.
 
 `comments pull` is safe to re-run. Replies already drafted on the box survive, and a thread
 already posted stays `status: sent` and is not posted twice.
