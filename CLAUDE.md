@@ -194,8 +194,24 @@ since `pull` is one command per PR, two PRs share a repo, and an operator who th
 stalled re-runs it. A missing `flock` on the box is a stop, not a fallback to running unlocked.
 The lock is keyed by repo rather than by the checkout path, so two `--repo-dir` runs of one repo
 wait on each other: over-locking costs a wait, under-locking costs the tree. `flock -n` is
-silent on failure, so the remote line uses exit codes (75 taken, 66 no checkout, 69 no flock)
-and `RunAgent` turns them into the message.
+silent on failure, so the remote line uses exit codes (111 taken, 112 no checkout, 113 no flock,
+114 no harness) and `RunAgent` turns them into the message.
+
+- **The codes are outside 64-78 on purpose.** They were sysexits values, and flock reports its
+  own failures in that range: it exits 69, `EX_UNAVAILABLE`, when it cannot exec the command.
+  That was this tool's code for "no flock", so a harness missing from the box's PATH printed
+  `cannot lock <box>:<dir>, so no agent was started` — a lock that was never the problem, and no
+  mention of the binary that was. 111 and up collides with neither sysexits nor the shell's
+  126/127 nor an agent's own status.
+- **The remote line prepends `$HOME/.local/bin:$HOME/bin:$HOME/go/bin` to PATH, then checks the
+  harness is there.** `ssh box '<cmd>'` is a non-interactive, non-login shell: on a zsh box
+  `.zshrc` is never sourced, so PATH is the shell's compiled-in default and every agent CLI,
+  which installs under `$HOME`, is invisible over ssh however well it works in a terminal on the
+  same box. The three dirs are a guess at the usual layout rather than a fix for every one, so
+  the check comes before the lock and the error says what the operator can do about it: put the
+  binary somewhere `~/.zshenv` exports, link it into `~/.local/bin`, or point `harness` at one
+  that is installed. Guessing more paths (a node version directory, a pyenv shim) is guessing at
+  another machine's install, which is what the message is for.
 
 PR defaults to the one for the Mac's current branch; a number or a PR URL overrides.
 

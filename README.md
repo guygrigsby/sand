@@ -28,7 +28,10 @@ On the Mac:
 - ssh to the box, by whatever alias you give `sand config init`
 
 On the box: a checkout of each repo under `~/projects/<repo>`, and an agent CLI (`claude` or
-`pi`) with the box-side skill installed.
+`pi`) with the box-side skill installed, findable over ssh. `ssh box '<cmd>'` gets none of an
+interactive shell's PATH, so a harness that only `.zshrc` puts on PATH is not there when `pull`
+looks for it; `~/.local/bin`, `~/bin` and `~/go/bin` are added for you, `~/.zshenv` covers the
+rest. `pull` says which binary it could not find rather than starting nothing quietly.
 
 ## Install
 

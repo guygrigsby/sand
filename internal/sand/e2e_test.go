@@ -388,6 +388,36 @@ func TestPullRefusesASecondAgentInTheSameCheckout(t *testing.T) {
 	}
 }
 
+// A harness that is not on the box's PATH is the most likely first failure on a new box, and
+// it used to be reported as a lock failure: flock exits 69 when it cannot exec the command,
+// which was this tool's own code for "no flock". So the operator was told the checkout could
+// not be locked when the lock was fine and the agent binary was simply missing.
+func TestPullSaysWhenTheHarnessIsMissingOnTheBox(t *testing.T) {
+	remoteBase, _ := harness(t)
+	if err := os.MkdirAll(filepath.Join(os.Getenv("HOME"), "projects", "r"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	flagNoAgent, flagAgent = false, "sand-no-such-harness"
+	captureStdout(t)
+
+	err := runPull(nil)
+	if err == nil {
+		t.Fatal("pull reported success with no agent binary on the box")
+	}
+	if strings.Contains(err.Error(), "lock") {
+		t.Errorf("a missing harness was reported as a lock failure: %v", err)
+	}
+	for _, want := range []string{"sand-no-such-harness", "PATH"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not name %q: %v", want, err)
+		}
+	}
+	// And nothing was started, so the lock was never taken either.
+	if _, statErr := os.Stat(agentLock(remoteBase, "r")); statErr == nil {
+		t.Error("took the lock for an agent that could not run")
+	}
+}
+
 // Everything already answered and posted: starting an agent there costs a turn to be told
 // there is nothing to do.
 func TestPullSkipsTheAgentWhenNothingIsPending(t *testing.T) {

@@ -50,12 +50,31 @@ type AgentRun struct {
 }
 
 // Exit codes the remote line uses to say what went wrong, since ssh gives back only a status.
-// 66 and 75 are EX_NOINPUT and EX_TEMPFAIL, which is close enough to what they mean here.
+//
+// Deliberately outside 64-78. These were sysexits values (66, 69, 75) picked for reading well,
+// and flock uses that same range for its own failures: it exits 69, EX_UNAVAILABLE, when it
+// cannot exec the command it was given. So a harness missing from the box's PATH came back as
+// this tool's code for "no flock", and the operator was told the checkout could not be locked
+// when the lock was fine and the agent binary was simply absent. 111 and up collides with
+// nothing standard: not sysexits, not the shell's 126/127, not an agent's own 0/1/2.
 const (
-	exitNoCheckout = 66
-	exitLocked     = 75
-	exitNoFlock    = 69
+	exitLocked     = 111
+	exitNoCheckout = 112
+	exitNoFlock    = 113
+	exitNoHarness  = 114
 )
+
+// exitFlockExec is flock's, not this tool's: EX_UNAVAILABLE, what it exits when execvp on the
+// command fails. Named so the switch below can say what it means instead of printing 69.
+const exitFlockExec = 69
+
+// remotePath is prepended to PATH on the box before anything is looked up. `ssh box '<cmd>'`
+// runs a non-interactive, non-login shell, which on a zsh box means .zshrc is never sourced and
+// PATH is whatever the shell compiles in: /bin:/usr/bin and friends. Every agent CLI installs
+// itself under $HOME, so without this the harness is invisible over ssh however well it works
+// in a terminal there. A guess at the standard three, not a fix for every layout; the pre-flight
+// below says so plainly when it is not enough.
+const remotePath = `PATH="$HOME/.local/bin:$HOME/bin:$HOME/go/bin:$PATH"`
 
 // RunAgent runs the agent on the box with the pulled threads to work on, streaming its
 // output. It blocks until the agent exits.
@@ -79,14 +98,21 @@ func RunAgent(r AgentRun) error {
 	}
 	// One remote line. Fail loudly if the checkout is not where we think, since an agent
 	// started in the wrong directory edits the wrong tree, and fail closed if there is no
-	// flock: running unlocked is the thing being prevented.
+	// flock: running unlocked is the thing being prevented. The harness is checked here too,
+	// before the lock, because flock's own answer to a binary it cannot exec is an exit code
+	// this side cannot tell apart from anything else and a message that mentions flock.
 	lock := remoteQuote(r.Lock)
-	remote := fmt.Sprintf("command -v flock >/dev/null 2>&1 || "+
+	remote := fmt.Sprintf("%s; "+
+		"command -v flock >/dev/null 2>&1 || "+
 		"{ echo \"sand: no flock on $(hostname); install util-linux\" >&2; exit %d; }; "+
+		"command -v %s >/dev/null 2>&1 || "+
+		"{ echo \"sand: %s is not on PATH over ssh on $(hostname) (PATH=$PATH)\" >&2; exit %d; }; "+
 		"mkdir -p %s 2>/dev/null; "+
 		"cd %s 2>/dev/null || { echo \"sand: no checkout at %s on $(hostname)\" >&2; exit %d; }; "+
 		"exec flock -n -E %d %s %s",
+		remotePath,
 		exitNoFlock,
+		quoted[0], r.Command[0], exitNoHarness,
 		remoteQuote(path.Dir(r.Lock)),
 		remoteQuote(r.Dir), r.Dir, exitNoCheckout,
 		exitLocked, lock, strings.Join(quoted, " "))
@@ -109,6 +135,17 @@ func RunAgent(r AgentRun) error {
 				r.Host, r.Dir, r.Lock)
 		case exitNoFlock:
 			return fmt.Errorf("cannot lock %s:%s, so no agent was started", r.Host, r.Dir)
+		case exitNoHarness:
+			return fmt.Errorf("%s is not on PATH over ssh on %s, so no agent was started: "+
+				"an ssh command gets none of an interactive shell's PATH, so put it in "+
+				"~/.zshenv or ~/.profile there, or link it into ~/.local/bin, or point "+
+				"`sand config set harness <name>` at one that is installed",
+				r.Command[0], r.Host)
+		case exitFlockExec:
+			// The pre-flight found it, so this is the binary itself: no execute bit, a bad
+			// interpreter line, the wrong architecture. flock's own message is on stderr.
+			return fmt.Errorf("%s is on %s but could not be started (see the flock message above)",
+				r.Command[0], r.Host)
 		}
 		return fmt.Errorf("agent on %s: %w", r.Host, err)
 	}
