@@ -50,6 +50,14 @@ file if you want to change either; `sand config` prints it.
 - **`push` rewrites only the front matter** of a file it has posted, so the conversation text
   stays byte-identical to what pull wrote.
 
+## The skill for the box side
+
+`skills/sand-comments/SKILL.md` teaches an agent on the box how to answer the pulled threads:
+where the files are, that only `## reply` and `commit:` are its to edit, and that push happens
+on the Mac. It is the canonical copy; `make skills` (on the box) symlinks it into
+`~/.claude/skills/` and `~/.pi/agent/skills/`, which is why both harnesses read one file.
+Edit it here, never the symlinks.
+
 ## Working on it
 
 `make check` is the gate: `go vet`, `gofmt`, tests, a linux build and the darwin/arm64 build.
