@@ -21,11 +21,16 @@ Edit here, never on the Mac. There is no git remote, so source reaches the Mac b
 
 Both use `--delete`, so a stray edit on the Mac is overwritten rather than left to diverge.
 
-The `BOX` lookup runs `$(GO) run . config get host` from the checkout, not an installed `sand`:
-`make sync` is what installs the new binary, so the installed one is by definition the old one,
-and an older one with no `config get` answers with the whole config file. The recipe refuses a
-`BOX` that is empty or more than one word rather than handing that to rsync. It is expanded
-inside the `sync` recipe only, so `make build` and `make check` never pay for the compile.
+The `BOX` lookup prefers `$(GO) run . config get host` from the checkout over an installed
+`sand`: `make sync` is what installs the new binary, so the installed one is by definition the
+old one, and an older one with no `config get` answers with the whole config file. It falls back
+to the installed `sand config get host` when the checkout does not compile, because the checkout
+is also what sync overwrites: a Mac copy mid-way through a half-synced or half-edited state
+cannot answer where the box is, and that is exactly when someone runs sync. The recipe refuses a
+`BOX` that is empty or more than one word rather than handing that to rsync, which also catches
+an installed `sand` too old to know `config get`, and says to pass `BOX=<alias>`. It is expanded
+once, inside the `sync` recipe, so `make build` and `make check` never pay for the compile and
+sync does not pay for it three times.
 
 If the tailnet refuses the Mac's local username (`tailnet policy does not permit you to SSH as
 user "<local-user>"`), the login user belongs in the Mac's `~/.ssh/config`, or in the host itself
