@@ -8,13 +8,30 @@ import (
 	"testing"
 )
 
-// configHome points ConfigPath at a temp dir. os.UserConfigDir reads XDG_CONFIG_HOME
-// first on linux and falls back to HOME/Library on darwin, so both get set.
+// configHome points ConfigPath at a temp dir, by both routes it can take.
 func configHome(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	t.Setenv("HOME", dir)
+}
+
+// The Mac and the box have to name the same file, so the path is HOME/.config and not
+// os.UserConfigDir, which is HOME/Library/Application Support on darwin. This is the case that
+// says so; it can only fail when run on the Mac, which is where it would have mattered.
+func TestConfigPathIsUnderDotConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+
+	want := filepath.Join(home, ".config", "sand", "config.yaml")
+	if got := ConfigPath(); got != want {
+		t.Errorf("ConfigPath() = %s, want %s", got, want)
+	}
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "elsewhere"))
+	if got, want := ConfigPath(), filepath.Join(home, "elsewhere", "sand", "config.yaml"); got != want {
+		t.Errorf("with XDG_CONFIG_HOME: ConfigPath() = %s, want %s", got, want)
+	}
 }
 
 func TestSetEveryKey(t *testing.T) {

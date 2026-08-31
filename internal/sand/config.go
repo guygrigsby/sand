@@ -41,11 +41,20 @@ var configDefault = map[string]string{
 	"model":      "",
 }
 
+// ConfigPath is `~/.config/sand/config.yaml` on both machines, `XDG_CONFIG_HOME` first.
+//
+// Deliberately not os.UserConfigDir, which answers `~/Library/Application Support` on darwin.
+// This tool has exactly two machines, one Mac and one Linux box, the same person keeps the same
+// file on both, and every mention of it in the docs and in `sand config`'s own output says
+// `~/.config`. A path that is right on one machine and silently different on the other is a
+// config nobody can find.
 func ConfigPath() string {
-	if dir, err := os.UserConfigDir(); err == nil {
-		return filepath.Join(dir, "sand", "config.yaml")
+	dir := os.Getenv("XDG_CONFIG_HOME")
+	if dir == "" {
+		home, _ := os.UserHomeDir() // empty without HOME, and then the read error names the path
+		dir = filepath.Join(home, ".config")
 	}
-	return filepath.Join(os.Getenv("HOME"), ".config", "sand", "config.yaml")
+	return filepath.Join(dir, "sand", "config.yaml")
 }
 
 // loadFile reads the config file as written, with no defaults filled in. Set needs that:
