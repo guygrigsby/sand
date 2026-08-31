@@ -46,13 +46,20 @@ ship:
 #
 # Excludes .git, like ship does. Source is what travels; git state is each machine's own, and
 # the Mac's is not reproducible from here: its remotes (origin on GitHub, and the one pointing
-# back at this box), its HEAD, its reflog. Syncing over it deleted an origin `gh repo create`
-# had just made, twice.
+# back at this box), its hooks, its HEAD, its reflog. Syncing over it deleted an origin
+# `gh repo create` had just made, twice.
+#
+# So the commits come by fetch instead, from whichever remote points back at the box, which is
+# what the Mac then signs, pushes and merges. Failure there is not fatal (that remote may not
+# exist yet, and the network may be down), and nothing is merged or checked out: which branch,
+# and whether it is signed yet, is the Mac's call. `git switch -C <branch> <box-remote>/<branch>`
+# is what makes the rsynced files stop reading as uncommitted changes.
 sync:
 	@box="$(BOX)"; \
 	case "x$$box" in x) echo "no box: pass BOX=<alias> or run \`sand config init\`"; exit 1;; \
 	  *[[:space:]]*) echo "BOX is not one host: $$box"; exit 1;; esac; \
 	set -x; rsync -a --delete --exclude build --exclude .git "$$box":projects/sand/ ./
+	-git fetch --all
 	$(MAKE) install
 
 clean:
