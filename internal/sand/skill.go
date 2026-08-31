@@ -1,79 +1,106 @@
 package sand
 
-// The box runs two agent harnesses and neither of them should own a copy of the skill:
-// skills/sand-comments/SKILL.md in this repo is the only one, and install points both
-// harnesses at it with a symlink. A copy would go stale the first time the file changes
-// and nothing would say so.
+// The skill is the box side of the tool: the only thing telling an agent there how the
+// comment files work. It ships inside the binary, because the box that needs it may hold
+// nothing but the binary, and install writes one copy to a harness-neutral path and links
+// the harnesses that are actually present at it. Links, not copies, so a re-install
+// updates every harness at once.
 
 import (
+	"bytes"
+	_ "embed"
 	"fmt"
 	"os"
 	"path/filepath"
 )
 
-const skillName = "sand-comments"
+//go:embed skill.md
+var skillDoc []byte
 
-// harnessSkillDirs are the user-level skill directories of the harnesses on the box,
-// relative to $HOME. Claude Code reads only its own (it ignores ~/.agents/skills, which
-// pi does read), so each gets its own link.
-var harnessSkillDirs = []string{
-	filepath.Join(".claude", "skills"),
-	filepath.Join(".pi", "agent", "skills"),
+const (
+	skillName = "sand"
+	skillFile = skillName + ".md"
+)
+
+// canonicalSkillPath is where the skill itself lives, relative to $HOME. ~/.agents/skills
+// belongs to no single harness, which is the reason to keep it there.
+var canonicalSkillPath = filepath.Join(".agents", "skills", skillFile)
+
+// A harness is one agent CLI on the box. marker is the directory that says it is installed
+// here at all; link is the path its loader reads, which differs per harness: pi discovers
+// top-level .md files in its skills dir, Claude Code only reads <name>/SKILL.md. Neither
+// discovers a top-level .md in ~/.agents/skills, so both get a link.
+type agentHarness struct {
+	Name   string
+	marker string
+	link   string
 }
 
-// FindSkillSource walks up from dir for the checkout's skill directory, so install works
-// from anywhere inside the repo.
-func FindSkillSource(dir string) (string, error) {
-	dir, err := filepath.Abs(dir)
-	if err != nil {
-		return "", err
-	}
-	for {
-		src := filepath.Join(dir, "skills", skillName)
-		if _, err := os.Stat(filepath.Join(src, "SKILL.md")); err == nil {
-			return src, nil
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", fmt.Errorf("no skills/%s/SKILL.md above the current directory: run this inside the sand checkout, or pass --source", skillName)
-		}
-		dir = parent
-	}
+var harnesses = []agentHarness{
+	{"pi", ".pi", filepath.Join(".pi", "agent", "skills", skillFile)},
+	{"claude code", ".claude", filepath.Join(".claude", "skills", skillName, "SKILL.md")},
 }
 
-// InstallSkill links source into each harness skill directory under home and returns the
-// links it made. A link that is already there is replaced; anything else in the way is an
-// error rather than something to delete, because it is not ours.
-func InstallSkill(home, source string) ([]string, error) {
-	source, err := filepath.Abs(source)
-	if err != nil {
-		return nil, err
+// SkillInstall is what an install did, so the caller can print it and a test can assert it.
+type SkillInstall struct {
+	Path    string         // the canonical file
+	Updated bool           // false when it was already byte-identical
+	Links   []string       // links created or repointed
+	Absent  []agentHarness // harnesses not installed on this machine, so not linked
+}
+
+// InstallSkill writes the embedded skill under home and links every harness present at it.
+// A harness that is not installed is reported, not an error: this same binary runs on the
+// Mac, where nothing may read skills at all.
+func InstallSkill(home string) (SkillInstall, error) {
+	out := SkillInstall{Path: filepath.Join(home, canonicalSkillPath)}
+
+	if err := os.MkdirAll(filepath.Dir(out.Path), 0o755); err != nil {
+		return out, err
 	}
-	if _, err := os.Stat(filepath.Join(source, "SKILL.md")); err != nil {
-		return nil, fmt.Errorf("%s is not a skill directory: %w", source, err)
+	old, err := os.ReadFile(out.Path)
+	if err != nil && !os.IsNotExist(err) {
+		return out, err
+	}
+	if !bytes.Equal(old, skillDoc) {
+		if err := os.WriteFile(out.Path, skillDoc, 0o644); err != nil {
+			return out, err
+		}
+		out.Updated = true
 	}
 
-	var made []string
-	for _, rel := range harnessSkillDirs {
-		dir := filepath.Join(home, rel)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return made, err
-		}
-		link := filepath.Join(dir, skillName)
-		switch info, err := os.Lstat(link); {
-		case err == nil && info.Mode()&os.ModeSymlink != 0:
-			if err := os.Remove(link); err != nil {
-				return made, err
+	for _, h := range harnesses {
+		if _, err := os.Stat(filepath.Join(home, h.marker)); err != nil {
+			if !os.IsNotExist(err) {
+				return out, err
 			}
-		case err == nil:
-			return made, fmt.Errorf("%s exists and is not a symlink; move it aside first", link)
-		case !os.IsNotExist(err):
-			return made, err
+			out.Absent = append(out.Absent, h)
+			continue
 		}
-		if err := os.Symlink(source, link); err != nil {
-			return made, err
+		link := filepath.Join(home, h.link)
+		if err := linkSkill(out.Path, link); err != nil {
+			return out, fmt.Errorf("%s: %w", h.Name, err)
 		}
-		made = append(made, link)
+		out.Links = append(out.Links, link)
 	}
-	return made, nil
+	return out, nil
+}
+
+// linkSkill points link at target, replacing a link that is already there. Anything else in
+// the way is an error: a real file there is somebody's own skill, not ours to delete.
+func linkSkill(target, link string) error {
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		return err
+	}
+	switch info, err := os.Lstat(link); {
+	case err == nil && info.Mode()&os.ModeSymlink != 0:
+		if err := os.Remove(link); err != nil {
+			return err
+		}
+	case err == nil:
+		return fmt.Errorf("%s exists and is not a symlink; move it aside first", link)
+	case !os.IsNotExist(err):
+		return err
+	}
+	return os.Symlink(target, link)
 }

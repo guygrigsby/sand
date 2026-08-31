@@ -52,18 +52,30 @@ file if you want to change either; `sand config` prints it.
 
 ## The skill for the box side
 
-`skills/sand-comments/SKILL.md` teaches an agent on the box how to answer the pulled threads:
-where the files are, that only `## reply` and `commit:` are its to edit, and that push happens
-on the Mac.
+`internal/sand/skill.md` teaches an agent on the box how to answer the pulled threads: where the
+files are, that only `## reply` and `commit:` are its to edit, and that push happens on the Mac.
+It is `go:embed`ed into the binary, so a box holding nothing but `sand` can still install it, and
+so the skill can never be a different version from the tool it describes. That is why it lives in
+the package and not in a `skills/` directory.
 
-Install it with `sand skill install` (or `make skills`), run on the box from anywhere in this
-checkout. It symlinks the directory into `~/.claude/skills/` and `~/.pi/agent/skills/`, so both
-harnesses read the one file in the repo. Claude Code does not read `~/.agents/skills/`, which pi
-does, so there is no single directory that covers both. Edit the repo copy, never a symlink; a
-harness only picks up changes on its next start.
+`sand skill install` (or `make skills`) writes it to `~/.agents/skills/sand.md` and links the
+harnesses that are actually installed on that machine at that one file:
 
-**Every change to this repo updates the skill in the same commit.** The skill is the only thing
-telling an agent on the box how the loop works, and the box cannot check the source of a tool it
+| harness | present when | link |
+|---|---|---|
+| pi | `~/.pi` exists | `~/.pi/agent/skills/sand.md` |
+| Claude Code | `~/.claude` exists | `~/.claude/skills/sand/SKILL.md` |
+
+Neither harness discovers a top-level `.md` in `~/.agents/skills/` (pi ignores root files there
+and reads nested ones; Claude Code does not look there at all), so the canonical path needs the
+links rather than replacing them. A harness that is not installed is reported and skipped, not an
+error: the same binary runs on the Mac. `sand skill show` prints what the binary carries.
+
+Editing an installed copy is pointless, the next install overwrites it. Edit `skill.md` here.
+A running harness only picks the change up on its next start.
+
+**Every change to this repo updates `skill.md` in the same commit.** The skill is the only thing
+telling an agent on the box how the loop works, and that agent cannot read the source of a tool it
 never runs. If a change moves a path, renames a field, changes what `push` reads, or adds a
 command, the skill says so before the change lands. If a change genuinely does not touch the box
 side, say that in the commit message rather than leaving it unsaid.

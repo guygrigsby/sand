@@ -37,7 +37,8 @@ sync:
 	rsync -a --delete --exclude build $(BOX):projects/sand/ ./
 	$(MAKE) install
 
-# One skill, both harnesses on the box read it. Run on the box, not the Mac.
+# Writes the skill this build carries and links whichever harnesses this machine has.
+# `sand skill install` does the same from an installed binary, with no checkout.
 skills:
 	$(GO) run . skill install
 

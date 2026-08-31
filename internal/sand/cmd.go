@@ -17,7 +17,6 @@ var (
 	flagPR        string
 	flagDryRun    bool
 	flagAll       bool
-	flagSource    string
 )
 
 // betweenPosts is a base courtesy delay between reply POSTs. The replies endpoint sends
@@ -57,36 +56,44 @@ func skillCmd() *cobra.Command {
 	}
 	install := &cobra.Command{
 		Use:   "install",
-		Short: "Point the agent harnesses at this repo's skill",
-		Long: "Run on the box, from anywhere in the sand checkout. Symlinks\n" +
-			"skills/" + skillName + " into ~/.claude/skills and ~/.pi/agent/skills, so both\n" +
-			"harnesses read the one file in the repo and editing it here is the whole update.",
+		Short: "Write the skill and link the agent harnesses at it",
+		Long: "Run on the box. Writes the skill this binary carries to ~/" + canonicalSkillPath + "\n" +
+			"and links every agent harness installed there at it, so one file serves all of\n" +
+			"them and a re-install after an upgrade updates all of them. No checkout needed.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error { return runSkillInstall() },
 	}
-	install.Flags().StringVar(&flagSource, "source", "", "skill directory to link (default: the one in the checkout)")
-	c.AddCommand(install)
+	show := &cobra.Command{
+		Use:   "show",
+		Short: "Print the skill this binary carries",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, err := cmd.OutOrStdout().Write(skillDoc)
+			return err
+		},
+	}
+	c.AddCommand(install, show)
 	return c
 }
 
 func runSkillInstall() error {
-	source := flagSource
-	if source == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return err
-		}
-		if source, err = FindSkillSource(cwd); err != nil {
-			return err
-		}
-	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
 	}
-	links, err := InstallSkill(home, source)
-	for _, l := range links {
-		fmt.Println(l, "->", source)
+	got, err := InstallSkill(home)
+	if got.Path != "" {
+		state := "unchanged"
+		if got.Updated {
+			state = "written"
+		}
+		fmt.Println(got.Path, "("+state+")")
+	}
+	for _, l := range got.Links {
+		fmt.Println(l, "->", got.Path)
+	}
+	for _, h := range got.Absent {
+		fmt.Printf("%s not installed here (no ~/%s), not linked\n", h.Name, h.marker)
 	}
 	return err
 }

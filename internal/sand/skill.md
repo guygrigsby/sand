@@ -1,5 +1,5 @@
 ---
-name: sand-comments
+name: sand
 description: Answer GitHub PR review comments on the sandbox box, where they arrive as markdown files under ~/.sand/<owner>/<repo>/pr-<n>/ (index.md plus c-<id>.md per thread). Use when asked to address review feedback, reply to reviewer comments, or work through a pulled PR review, and when a c-<id>.md or ~/.sand path shows up.
 ---
 
@@ -53,10 +53,11 @@ code moved under it, so check the current file before answering.
 
 ## This file
 
-It is a symlink to `skills/sand-comments/SKILL.md` in the sand checkout on this box, so the
-repo copy is the one to edit and every change to sand updates it in the same commit. If the
-link is missing after a fresh checkout, `sand skill install` from inside the checkout puts it
-back for both harnesses.
+It lives at `~/.agents/skills/sand.md`, written there by `sand skill install` out of the `sand`
+binary; what you are reading may be a symlink to it from a harness skill directory. Editing
+either is pointless, the next install overwrites it. The text ships with the tool and changes
+when the tool changes, so if it disagrees with how `sand` actually behaves, the binary is newer
+than the install: re-run `sand skill install`.
 
 ## Multiple PRs
 

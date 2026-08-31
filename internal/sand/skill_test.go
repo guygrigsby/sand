@@ -5,98 +5,138 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
-// repoWithSkill fakes a checkout: <root>/skills/sand-comments/SKILL.md plus a subdirectory
-// to search up from.
-func repoWithSkill(t *testing.T) (root, source string) {
+// The embedded skill has to satisfy both harnesses' front matter rules, or it loads as
+// nothing and the box gets no instructions at all with no error anywhere.
+func TestEmbeddedSkillFrontMatter(t *testing.T) {
+	m := frontMatter.FindSubmatch(skillDoc)
+	if m == nil {
+		t.Fatal("skill.md has no YAML front matter")
+	}
+	var fm struct {
+		Name        string `yaml:"name"`
+		Description string `yaml:"description"`
+	}
+	if err := yaml.Unmarshal(m[1], &fm); err != nil {
+		t.Fatal(err)
+	}
+	if fm.Name != skillName {
+		t.Errorf("front matter name is %q, want %q (Claude Code requires it to match the directory)", fm.Name, skillName)
+	}
+	if fm.Description == "" {
+		t.Error("front matter has no description, so pi will not discover it")
+	}
+}
+
+// installed reads the skill back the way a harness would: through whatever the loader finds
+// at that path.
+func installed(t *testing.T, path string) string {
 	t.Helper()
-	root = t.TempDir()
-	source = filepath.Join(root, "skills", skillName)
-	if err := os.MkdirAll(filepath.Join(source, "nested"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(source, "SKILL.md"), []byte("---\nname: x\n---\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return root, source
-}
-
-func TestFindSkillSourceWalksUp(t *testing.T) {
-	root, source := repoWithSkill(t)
-	deep := filepath.Join(root, "internal", "sand")
-	if err := os.MkdirAll(deep, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := FindSkillSource(deep)
+	b, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("%s: %v", path, err)
 	}
-	// The temp dir may be a symlink (/tmp on darwin), so compare resolved paths.
-	if want := resolve(t, source); resolve(t, got) != want {
-		t.Fatalf("found %s, want %s", got, want)
-	}
-
-	if _, err := FindSkillSource(t.TempDir()); err == nil {
-		t.Fatal("no error outside a checkout")
-	}
+	return string(b)
 }
 
-func TestInstallSkillLinksBothHarnesses(t *testing.T) {
-	_, source := repoWithSkill(t)
+func TestInstallSkillLinksHarnessesPresent(t *testing.T) {
 	home := t.TempDir()
+	// Only pi is installed here; the Claude Code directory is deliberately missing.
+	if err := os.MkdirAll(filepath.Join(home, ".pi"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 
-	links, err := InstallSkill(home, source)
+	got, err := InstallSkill(home)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(links) != len(harnessSkillDirs) {
-		t.Fatalf("made %d links, want %d", len(links), len(harnessSkillDirs))
+	if !got.Updated {
+		t.Error("first install reported no write")
 	}
-	for _, link := range links {
-		// The harness reads SKILL.md through the link, which is the point of linking.
-		b, err := os.ReadFile(filepath.Join(link, "SKILL.md"))
-		if err != nil {
-			t.Fatalf("%s: %v", link, err)
-		}
-		if !strings.HasPrefix(string(b), "---") {
-			t.Fatalf("%s: read %q through the link", link, b)
-		}
-		if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
-			t.Fatalf("%s is not a symlink (%v)", link, err)
-		}
+	if want := filepath.Join(home, ".agents", "skills", "sand.md"); got.Path != want {
+		t.Errorf("canonical path %s, want %s", got.Path, want)
+	}
+	if body := installed(t, got.Path); body != string(skillDoc) {
+		t.Error("canonical file is not the embedded skill")
 	}
 
-	// Re-running is how an agent recovers a link that points at an old checkout.
-	if _, err := InstallSkill(home, source); err != nil {
-		t.Fatalf("second install: %v", err)
+	if len(got.Links) != 1 || !strings.HasSuffix(got.Links[0], filepath.Join(".pi", "agent", "skills", "sand.md")) {
+		t.Fatalf("links %v, want just the pi one", got.Links)
 	}
-
-	// A real directory in the way belongs to someone else.
-	occupied := filepath.Join(home, harnessSkillDirs[0], skillName)
-	if err := os.RemoveAll(occupied); err != nil {
-		t.Fatal(err)
+	if body := installed(t, got.Links[0]); body != string(skillDoc) {
+		t.Error("pi's link does not read the skill")
 	}
-	if err := os.MkdirAll(occupied, 0o755); err != nil {
-		t.Fatal(err)
+	if len(got.Absent) != 1 || got.Absent[0].Name != "claude code" {
+		t.Errorf("absent %v, want claude code", got.Absent)
 	}
-	if _, err := InstallSkill(home, source); err == nil {
-		t.Fatal("clobbered a real directory")
+	if _, err := os.Lstat(filepath.Join(home, ".claude")); !os.IsNotExist(err) {
+		t.Error("install created a directory for a harness that is not installed")
 	}
 }
 
-func TestInstallSkillRejectsNonSkillSource(t *testing.T) {
-	if _, err := InstallSkill(t.TempDir(), t.TempDir()); err == nil {
-		t.Fatal("no error for a source without SKILL.md")
+func TestInstallSkillIsRepeatable(t *testing.T) {
+	home := t.TempDir()
+	for _, h := range harnesses {
+		if err := os.MkdirAll(filepath.Join(home, h.marker), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
-}
 
-func resolve(t *testing.T, p string) string {
-	t.Helper()
-	r, err := filepath.EvalSymlinks(p)
+	first, err := InstallSkill(home)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return r
+	if len(first.Links) != len(harnesses) {
+		t.Fatalf("linked %d harnesses, want %d", len(first.Links), len(harnesses))
+	}
+
+	second, err := InstallSkill(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Updated {
+		t.Error("second install rewrote an identical file")
+	}
+	for _, link := range second.Links {
+		if body := installed(t, link); body != string(skillDoc) {
+			t.Errorf("%s does not read the skill after a re-install", link)
+		}
+	}
+
+	// An upgraded binary carrying different text has to win: that is the update path.
+	if err := os.WriteFile(first.Path, []byte("stale\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	third, err := InstallSkill(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !third.Updated {
+		t.Error("install left a stale skill in place")
+	}
+	if body := installed(t, third.Links[0]); body != string(skillDoc) {
+		t.Error("link still reads the stale skill")
+	}
+}
+
+func TestInstallSkillKeepsSomeoneElsesFile(t *testing.T) {
+	home := t.TempDir()
+	claude := harnesses[1]
+	link := filepath.Join(home, claude.link)
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(link, []byte("hand written skill\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := InstallSkill(home); err == nil {
+		t.Fatal("no error with a real file in the way")
+	}
+	if body := installed(t, link); body != "hand written skill\n" {
+		t.Fatalf("clobbered a real file: %q", body)
+	}
 }
