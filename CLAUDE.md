@@ -11,7 +11,11 @@
 | edits code | no | yes |
 | canonical source of `sand` | no, a build copy | yes, this repo |
 
-Edit here, never on the Mac. There is no git remote, so source reaches the Mac by rsync:
+Edit here, never on the Mac. The repo has a GitHub remote
+([guygrigsby/sand](https://github.com/guygrigsby/sand), private, default branch `main`), but only
+on the Mac: this box has no GitHub credentials, so it cannot fetch or push there, and `main` on
+GitHub is signed history the box could not have produced. So source still reaches the Mac by
+rsync, and the Mac is what pushes:
 
 - On the Mac, in its copy: `make sync` (rsyncs from here, then installs). No argument needed:
   `BOX` comes from `sand config get host`, i.e. the same host the tool itself uses, so
