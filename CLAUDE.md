@@ -189,6 +189,24 @@ being printed by hand.
   by the front matter rewrite that marks it sent. This is why `push` takes `--remote`.
 - **`push` rewrites only the front matter** of a file it has posted, so the conversation text
   stays byte-identical to what pull wrote.
+- **"Already posted" is answered by GitHub, not by `status:` on the box.** The POST goes out and
+  then the box is told, and everything in between is a way to lose the telling: a dropped ssh, a
+  rebooted box, a read-only disk, Ctrl-C during the second between two replies. The operator then
+  re-runs, which is what every message here tells them to do, and the reply used to go out again
+  and notify every subscriber again. So before posting anything, `push` reads the threads once
+  more and collects what the authenticated account (`gh api user`) has already said on each of
+  them; a draft contained in one of those is marked sent and skipped, counted as "already posted
+  and re-marked". Containment rather than equality, because what gets posted is the draft plus a
+  commit link and re-pointing can change that hash between runs. No second file, no local ledger:
+  the state that decides is the state that cannot be lost. `e2e_test.go` proves it by making the
+  box dir unwritable at the moment of the POST.
+  - **That check failing is a stop, not a warning.** Not knowing what is on a thread is exactly
+    the state where posting duplicates, so a fetch error refuses the whole run and says nothing
+    was posted. `--dry-run` warns instead, because a preview that cannot reach GitHub is still a
+    useful preview.
+  - **Losing the marking is a warning, not an error.** By then the replies are on GitHub and
+    exiting non-zero says the opposite. The message names what happens next: nothing was posted
+    twice, the next run re-marks them.
 
 ## The skill for the box side
 

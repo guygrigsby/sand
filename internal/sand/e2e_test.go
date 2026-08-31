@@ -23,6 +23,7 @@ case "$*" in
     ;;
   *"repo view"*)  echo '{"nameWithOwner":"o/r"}' ;;
   *"/commits?"*)  cat "$GH_COMMITS" ;;
+  *"api user"*)   echo guy ;;
   *graphql*)      cat "$GH_FIXTURE" ;;
   *"pr view"*)    echo '{"number":42,"url":"https://github.com/o/r/pull/42","title":"Fix the thing","headRefName":"topic"}' ;;
   *) echo "fake gh: unhandled: $*" >&2; exit 1 ;;
@@ -59,6 +60,16 @@ const fixture = `{"data":{"repository":{"pullRequest":{
         "url":"https://github.com/o/r/pull/42#discussion_r2043900",
         "diffHunk":"@@ -10,1 +10,1 @@","author":{"login":"reviewer"}}]}}]}}}}}
 `
+
+// fixtureWithOurReply is the same PR after a reply of ours landed on the first thread: what
+// a re-fetch shows when the POST went out but the box was never marked. Derived from fixture
+// rather than copied, so the two cannot drift.
+var fixtureWithOurReply = strings.Replace(fixture,
+	`"diffHunk":"","author":{"login":"other"}}]}}`,
+	`"diffHunk":"","author":{"login":"other"}},
+       {"databaseId":2043999,"body":"Closed the fd in both paths.","createdAt":"2026-08-31T11:00:00Z",
+        "url":"https://github.com/o/r/pull/42#discussion_r2043999",
+        "diffHunk":"","author":{"login":"guy"}}]}}`, 1)
 
 // signedCommits is what push expects to see before it will post: GitHub reporting every
 // commit of the PR as verified. Tests that care about the other case overwrite the file.
@@ -362,6 +373,80 @@ func TestPullDryRunTouchesNothing(t *testing.T) {
 
 // Replies quote commit hashes, and signing rewrites them, so posting before the branch is
 // signed publishes hashes that are about to stop existing. push has to stop instead.
+// The reply is posted, then the box is told. Everything in between is a way to lose the
+// telling: a dropped ssh, a rebooted box, a full disk, Ctrl-C in a batch that sleeps a
+// second between replies. The operator then does what every message in this tool says and
+// re-runs, which used to post the same reply a second time and notify every subscriber
+// again. GitHub is now asked what is already on the thread, so the re-run re-marks it.
+func TestPushDoesNotPostTwiceAfterTheMarkingIsLost(t *testing.T) {
+	remoteBase, ghLog := harness(t)
+	if err := runPull(nil); err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	prDir := filepath.Join(remoteBase, "o", "r", "pr-42")
+	p := filepath.Join(prDir, "c-2043881.md")
+	if err := os.WriteFile(p, []byte(read(t, p)+"\nClosed the fd in both paths.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// The box stops accepting writes the moment the POST is away.
+	if err := os.Chmod(prDir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	if err := runPush(nil); err != nil {
+		t.Fatalf("push: %v", err) // a lost marking is a warning now, not a failure
+	}
+	if err := os.Chmod(prDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(read(t, ghLog), "/replies"); n != 1 {
+		t.Fatalf("first push made %d reply POST(s), want 1", n)
+	}
+	if got := read(t, p); !strings.Contains(got, "status: pending") {
+		t.Fatalf("the box was marked after all, so this test proves nothing:\n%s", got)
+	}
+
+	// GitHub now has the reply, which is what a re-fetch would show.
+	if err := os.WriteFile(os.Getenv("GH_FIXTURE"), []byte(fixtureWithOurReply), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runPush(nil); err != nil {
+		t.Fatalf("re-run: %v", err)
+	}
+	if n := strings.Count(read(t, ghLog), "/replies"); n != 1 {
+		t.Errorf("the re-run posted the same reply again: %d POST(s) total", n)
+	}
+	if got := read(t, p); !strings.Contains(got, "status: sent") {
+		t.Errorf("the re-run did not re-mark the thread sent:\n%s", got)
+	}
+}
+
+// Refusing to post is the only safe answer when GitHub cannot say what is already there.
+func TestPushRefusesWhenItCannotCheckWhatIsPosted(t *testing.T) {
+	remoteBase, ghLog := harness(t)
+	if err := runPull(nil); err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	p := filepath.Join(remoteBase, "o", "r", "pr-42", "c-2043881.md")
+	if err := os.WriteFile(p, []byte(read(t, p)+"\nClosed the fd.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(os.Getenv("GH_FIXTURE"), []byte(`{"errors":[{"message":"upstream is having a day"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runPush(nil)
+	if err == nil {
+		t.Fatal("push posted without being able to check for replies already posted")
+	}
+	if !strings.Contains(err.Error(), "already on") && !strings.Contains(err.Error(), "cannot tell") {
+		t.Errorf("error does not say why it stopped: %v", err)
+	}
+	if strings.Contains(read(t, ghLog), "/replies") {
+		t.Error("a reply went out anyway")
+	}
+}
+
 func TestPushRefusesUnsignedCommits(t *testing.T) {
 	remoteBase, ghLog := harness(t)
 	if err := runPull(nil); err != nil {

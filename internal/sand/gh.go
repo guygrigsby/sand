@@ -359,6 +359,63 @@ func Fetch(t *Target, warn func(string)) ([]Thread, []Review, error) {
 	}
 }
 
+// ViewerLogin is the account gh is authenticated as, which is who any reply already on a
+// thread would have been posted by.
+func ViewerLogin() (string, error) {
+	out, err := gh("api", "user", "--jq", ".login")
+	if err != nil {
+		return "", err
+	}
+	login := strings.TrimSpace(out)
+	if login == "" {
+		return "", fmt.Errorf("gh api user returned no login")
+	}
+	return login, nil
+}
+
+// PostedReplies is what this account has already said on each thread, keyed by the comment
+// id a reply targets. push needs it to answer "did I already post this" from GitHub rather
+// than from a file on the box, because the box is the copy that gets lost.
+func PostedReplies(threads []Thread, viewer string) map[int64][]string {
+	posted := make(map[int64][]string, len(threads))
+	for _, th := range threads {
+		// The first comment is the reviewer's; a reply of ours is any later one by us.
+		for _, c := range th.Comments[1:] {
+			if c.Author == viewer {
+				posted[th.Meta.CommentID] = append(posted[th.Meta.CommentID], c.Body)
+			}
+		}
+	}
+	return posted
+}
+
+// alreadySaid reports whether one of the replies already on the thread contains the drafted
+// text. Containment rather than equality: what push posts is the draft plus a commit link,
+// and the hash in that link can differ between runs once signing has moved it, so the draft
+// is the part that is stable. Whitespace is normalised because a round trip through GitHub
+// and back is not byte-exact.
+func alreadySaid(existing []string, draft string) bool {
+	want := normaliseReply(draft)
+	if want == "" {
+		return false
+	}
+	for _, e := range existing {
+		if strings.Contains(normaliseReply(e), want) {
+			return true
+		}
+	}
+	return false
+}
+
+func normaliseReply(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		lines[i] = strings.TrimRight(l, " \t")
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
 // Reply posts body as a threaded reply to a review comment and returns the new
 // comment's URL. Replies to replies are rejected by the API, so commentID must be the
 // first comment of its thread.

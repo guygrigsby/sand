@@ -54,6 +54,13 @@ needed no change; the HTML hint comment in the slot is stripped, so leaving it i
 Re-running `sand comments pull` is safe mid-work: the reply, `commit:` and sent status are
 merged forward, everything else refetched.
 
+`status: pending` on a thread does not always mean unposted. Push decides what is already
+posted by reading the thread on GitHub and matching your reply text against it, not by trusting
+`status:`, so a reply that went out while the box was unreachable is re-marked on the next run
+instead of posted twice. Two things follow: do not edit `status:` to make something re-post, and
+do not reword a reply that has already been posted unless you mean to post a second one, because
+changed text no longer matches what is on the thread. Follow-ups are new replies on purpose.
+
 ## Reply content
 
 Name what changed and link the commit that changed it, backticked short hash. No bare

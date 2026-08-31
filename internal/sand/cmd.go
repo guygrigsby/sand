@@ -643,12 +643,26 @@ func runPush(args []string) error {
 	// Only worth checking when there is something to post.
 	g := gitCmd{out: os.Stdout}
 	branchRef := ""
+	// What this account has already posted, per thread. The box's `status: sent` is a
+	// cache of this and can be lost (see the posted map below), so GitHub is asked.
+	posted := map[int64][]string{}
 	if pendingReplies(files) > 0 {
 		if err := requireSignedCommits(target); err != nil {
 			if !flagDryRun {
 				return err
 			}
 			warn(err.Error())
+		}
+		if p, err := alreadyPosted(target); err != nil {
+			// Fail closed. Posting without knowing what is already there is how the same
+			// reply goes out twice, and every subscriber gets notified twice.
+			if !flagDryRun {
+				return fmt.Errorf("cannot tell which replies are already on %s#%d, so nothing was posted: %w",
+					target.Slug(), target.Number, err)
+			}
+			warn(fmt.Sprintf("cannot check for replies already posted: %v", err))
+		} else {
+			posted = p
 		}
 		if target.Branch != "" {
 			branchRef = flagRemote + "/" + target.Branch
@@ -659,7 +673,7 @@ func runPush(args []string) error {
 		}
 	}
 
-	var posted, skipped int
+	var sent, skipped, recovered int
 	for _, tf := range files {
 		f, raw, t := tf.path, tf.raw, tf.thread
 		if t.Reply == "" || t.Sent() {
@@ -668,6 +682,18 @@ func runPush(args []string) error {
 		}
 
 		name := filepath.Base(f)
+
+		// Posted last time, but the box never found out: the marking write is the step
+		// after the POST, and anything from a dropped ssh to a Ctrl-C lands in between.
+		// Re-marking it is the whole recovery; posting it again is what we are avoiding.
+		if alreadySaid(posted[t.Meta.CommentID], t.Reply) {
+			fmt.Printf("%s: this reply is already on the thread, marking it sent\n", name)
+			if err := markSent(f, raw, &t, ""); err != nil {
+				warn(fmt.Sprintf("%s: %v", name, err))
+			}
+			recovered++
+			continue
+		}
 		if t.Meta.Commit == "" {
 			warn(fmt.Sprintf("%s: no commit recorded, posting the reply without one", name))
 		} else if branchRef != "" {
@@ -691,11 +717,11 @@ func runPush(args []string) error {
 		body := composeReply(target, t)
 		if flagDryRun {
 			fmt.Printf("--- %s → comment %d (%s)\n%s\n", name, t.Meta.CommentID, t.Location(), body)
-			posted++
+			sent++
 			continue
 		}
 
-		if posted > 0 {
+		if sent > 0 {
 			time.Sleep(betweenPosts)
 		}
 		url, err := Reply(target, t.Meta.CommentID, body)
@@ -705,37 +731,74 @@ func runPush(args []string) error {
 			failed++
 			continue
 		}
-		posted++
+		sent++
 		fmt.Printf("posted %s (%s) → %s\n", name, t.Location(), url)
 
-		t.Meta.Status = StatusSent
-		t.Meta.RepliedAt = time.Now().Format(time.RFC3339)
-		t.Meta.ReplyURL = url
-		out, err := ReplaceFrontMatter(raw, t.Meta)
-		if err != nil {
-			warn(fmt.Sprintf("%s: posted, but could not mark it sent: %v", name, err))
-			continue
-		}
-		if err := os.WriteFile(f, []byte(out), 0o644); err != nil {
-			return err
+		if err := markSent(f, raw, &t, url); err != nil {
+			// The reply is out. Losing this write is survivable now: the next run reads
+			// the thread off GitHub and marks it rather than posting it again.
+			warn(fmt.Sprintf("%s: posted, but could not mark it sent locally: %v", name, err))
 		}
 	}
 
 	if flagDryRun {
-		fmt.Printf("dry run: %d reply(ies) would be posted, %d skipped\n", posted, skipped)
+		fmt.Printf("dry run: %d reply(ies) would be posted, %d skipped\n", sent, skipped)
 		return nil
 	}
-	fmt.Printf("%d posted, %d skipped, %d failed\n", posted, skipped, failed)
-	if posted > 0 {
-		// Mark them sent on the box too, so a re-run does not post twice.
+	fmt.Printf("%d posted, %d skipped, %d failed", sent, skipped, failed)
+	if recovered > 0 {
+		fmt.Printf(", %d already posted and re-marked", recovered)
+	}
+	fmt.Println()
+	if sent+recovered > 0 {
+		// Carry the markings back, so the usual case costs no GitHub calls next time. This
+		// failing is no longer a double-post: it is a slower next run.
 		if err := sendDir(cfg.Host, dir, remotePath); err != nil {
-			return fmt.Errorf("replies posted, but marking them sent on %s failed: %w", cfg.Host, err)
+			warn(fmt.Sprintf("could not mark replies sent on %s (%v); nothing was posted twice, "+
+				"the next run reads the thread from GitHub and re-marks them", cfg.Host, err))
 		}
 	}
 	if failed > 0 {
 		return fmt.Errorf("%d reply(ies) failed", failed)
 	}
 	return nil
+}
+
+// alreadyPosted asks GitHub what this account has already replied on each thread of the PR.
+//
+// The box's `status: sent` is only a cache of this. It is written after the POST, so every
+// way of dying in between (dropped ssh, rebooted box, full disk, Ctrl-C in a batch that
+// sleeps a second between replies) leaves a reply posted and recorded as pending, and the
+// message telling the operator to re-run then posts it again. GitHub is the copy that
+// cannot be lost, so it is the one that decides.
+func alreadyPosted(t Target) (map[int64][]string, error) {
+	viewer, err := ViewerLogin()
+	if err != nil {
+		return nil, err
+	}
+	threads, _, err := Fetch(&t, func(string) {}) // warnings belong to pull, not here
+	if err != nil {
+		return nil, err
+	}
+	return PostedReplies(threads, viewer), nil
+}
+
+// markSent records the reply in the thread file's front matter, leaving the body untouched.
+// An empty url means the reply was found already on GitHub rather than posted just now, so
+// there is no new comment to link.
+func markSent(path, raw string, t *Thread, url string) error {
+	t.Meta.Status = StatusSent
+	if t.Meta.RepliedAt == "" {
+		t.Meta.RepliedAt = time.Now().Format(time.RFC3339)
+	}
+	if url != "" {
+		t.Meta.ReplyURL = url
+	}
+	out, err := ReplaceFrontMatter(raw, t.Meta)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(out), 0o644)
 }
 
 func pendingReplies(files []threadFile) int {
