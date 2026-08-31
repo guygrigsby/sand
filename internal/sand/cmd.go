@@ -45,23 +45,38 @@ func root() *cobra.Command {
 		Use:   "sand",
 		Short: "Development helper for the sandbox box",
 		Long: "sand runs on the Mac and ferries work to and from the sandbox.\n\n" +
-			"Today that means PR review comments: `sand comments pull` puts them on the box\n" +
-			"as markdown for an agent to address, `sand comments push` posts the replies back\n" +
-			"to the exact review comments they answer.",
+			"`sand new` starts an issue on the box. `sand comments pull` puts PR review\n" +
+			"threads there for an agent, and `sand up` signs and publishes its work.",
 		// Execute prints the error itself, prefixed; cobra printing it too says it twice.
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
 	c.PersistentFlags().StringVar(&flagHost, "host", "", "sandbox ssh alias or user@host (overrides config)")
 	c.PersistentFlags().StringVar(&flagRemoteDir, "remote-dir", "", "base dir on the sandbox (overrides config)")
-	c.AddCommand(commentsCmd(), configCmd(), signCmd(), skillCmd(), upCmd())
+	c.AddCommand(commentsCmd(), configCmd(), newCmd(), signCmd(), skillCmd(), upCmd())
+	return c
+}
+
+func newCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "new <issue-number>",
+		Short: "Start an issue on the sandbox",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runNew(args)
+		},
+	}
+	c.Flags().StringVar(&flagRemote, "remote", "origin", "remote to branch from")
+	c.Flags().StringVar(&flagBase, "base", "main", "base branch")
+	c.Flags().BoolVar(&flagDryRun, "dry-run", false, "show what would be created, change nothing")
 	return c
 }
 
 func upCmd() *cobra.Command {
 	c := &cobra.Command{
-		Use:   "up [pr-number|pr-url]",
-		Short: "Sign, push and post the replies: the whole Mac side in one command",
+		Use:     "up [pr-number|pr-url]",
+		Aliases: []string{"push"},
+		Short:   "Sign, push and post the replies: the whole Mac side in one command",
 		Long: "Everything the Mac owes the loop once an agent on the box has answered the\n" +
 			"threads, in order, with each step verified before the next one runs:\n\n" +
 			"  1 sign      the commits on the PR's branch that are not signed yet\n" +
@@ -87,11 +102,8 @@ func upCmd() *cobra.Command {
 // signing rewrites hashes, the replies quote them, so signing has to be finished and pushed
 // and confirmed by GitHub before a single reply goes out.
 func runUp(cmd *cobra.Command, args []string) error {
-	cfg, target, err := setup(args)
+	cfg, target, create, err := setupUp(args)
 	if err != nil {
-		return err
-	}
-	if err := target.LoadURL(); err != nil {
 		return err
 	}
 	branch := target.Branch
@@ -99,9 +111,21 @@ func runUp(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("gh did not say which branch %s#%d comes from", target.Slug(), target.Number)
 	}
 
-	fmt.Printf("PR:      %s#%d %q\n", target.Slug(), target.Number, target.Title)
+	var description []byte
+	if create {
+		if description, err = loadPRDescription(cfg, target); err != nil {
+			return err
+		}
+		fmt.Printf("Issue:   %s#%d %q\n", target.Slug(), target.Number, target.Title)
+	} else {
+		fmt.Printf("PR:      %s#%d %q\n", target.Slug(), target.Number, target.Title)
+	}
 	fmt.Printf("Branch:  %s → %s/%s\n", branch, flagRemote, flagBase)
-	fmt.Printf("Replies: %s:%s\n", cfg.Host, target.RemotePath(cfg.RemoteDir))
+	if create {
+		fmt.Printf("PR body: %s:%s/pr-description.md\n", cfg.Host, target.issuePath(cfg.RemoteDir))
+	} else {
+		fmt.Printf("Replies: %s:%s\n", cfg.Host, target.RemotePath(cfg.RemoteDir))
+	}
 	if flagDryRun {
 		fmt.Println("dry run: nothing gets rewritten, pushed or posted")
 	}
@@ -135,7 +159,19 @@ func runUp(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	fmt.Println("\n3/4 verify on GitHub")
+	if create {
+		fmt.Println("\n3/4 open and verify on GitHub")
+		if flagDryRun {
+			fmt.Printf("  dry run: would open a PR for %s from %s\n", target.Title, branch)
+			return nil
+		}
+		if target, err = createPullRequest(target, description); err != nil {
+			return err
+		}
+		fmt.Printf("  opened %s\n", target.URL)
+	} else {
+		fmt.Println("\n3/4 verify on GitHub")
+	}
 	unverified, err := UnverifiedCommits(target)
 	if err != nil {
 		return fmt.Errorf("asking GitHub about the signatures: %w", err)
@@ -155,6 +191,10 @@ func runUp(cmd *cobra.Command, args []string) error {
 			len(unverified))
 	}
 
+	if create {
+		fmt.Println("\n4/4 replies\n  no review replies yet")
+		return nil
+	}
 	fmt.Println("\n4/4 replies")
 	return runPush(args)
 }

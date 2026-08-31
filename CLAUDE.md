@@ -35,8 +35,19 @@ thing to hardcode for every machine.
 ## Commands
 
 `sand` is where the Mac-side scripts for this workflow are being consolidated, so each one is a
-subcommand rather than a shell file: `comments` (below), `up`, `sign`, `skill`, `config`
-(`init`, `get`, `set`).
+subcommand rather than a shell file: `new`, `comments` (below), `up` (`push` is an alias),
+`sign`, `skill`, `config` (`init`, `get`, `set`).
+
+## Starting an issue: `sand new <issue-number>`
+
+`new` asks `gh` for the issue, derives `guy/<number>-<lowercase-title>`, fetches the configured
+base and creates that branch in both the Mac checkout and `~/projects/<repo>` on the box. Both
+checkouts must be clean and the branch must not exist. It writes the issue title, URL and body to
+`<remote_dir>/<owner>/<repo>/issue-<n>/issue.md`; that directory is the durable handoff for
+brainstorming and later holds `pr-description.md`.
+
+The Mac branch exists so `sand up` has an unambiguous current issue before `aif` imports the
+box commits. Creating a ref is bookkeeping, not source editing.
 
 ## The whole Mac side: `sand up [pr]`
 
@@ -50,6 +61,11 @@ step verified before the next runs and printed so a watching human can check it:
 3. `verify` that GitHub reports every commit of the PR as verified. A failure here is almost
    always the signing key missing from the GitHub account, so the error says that.
 4. `replies`: `comments push`.
+
+If the current branch has no open PR, its name must be `guy/<issue>-...`. After steps 1 and 2,
+`up` reads `issue-<n>/pr-description.md` from the box and opens the PR with the issue title. It
+then runs the same GitHub signature verification. A missing description stops the run. `push`
+is an alias for `up` so both entry points have the same ordering and checks.
 
 Flags: `--pr`, `--remote`, `--base`, `-y/--yes`, `--allow-other-authors`, `--dry-run`. The dry run covers all four steps
 at once and changes nothing anywhere. Declining the rewrite at step 1 stops the run rather than
