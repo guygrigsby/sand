@@ -28,8 +28,10 @@ Both use `--delete`, so a stray edit on the Mac is overwritten rather than left 
 
 PR defaults to the one for the Mac's current branch; a number or a PR URL overrides.
 
-Config is `~/.config/sand/config.yaml` (`host`, `remote_dir`), overridden by `--host` /
-`--remote-dir` and `SAND_HOST` / `SAND_REMOTE_DIR`. `sand config init --host <alias>` writes it.
+Defaults are `guy-llm-sandbox` and `~/.sand`, so no config is needed to use it. Override in
+`~/.config/sand/config.yaml` (`host`, `remote_dir`), or with `--host` / `--remote-dir`, or
+`SAND_HOST` / `SAND_REMOTE_DIR`, in that order of precedence. `sand config init` writes the
+file if you want to change either; `sand config` prints it.
 
 ### Things that are the way they are on purpose
 
