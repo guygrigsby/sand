@@ -22,6 +22,15 @@ files, and replies leave the same way. `sand` itself runs on the Mac; never try 
 Start at `index.md`. Anything with `status: pending` needs work; `status: sent` is already
 posted, leave it alone.
 
+## You may have been started by the Mac
+
+`sand comments pull` starts an agent here as soon as it has written the files, in the repo
+checkout the PR is about (`~/projects/<repo>`), with a prompt naming the PR directory. If that
+is you, nobody is watching the terminal: work every pending thread, then finish by saying which
+threads you answered and which you left and why. The Mac reads the files back and prints that
+list either way. Nothing changes about the loop below; a human who ran `pull --no-agent` and
+then asked you the same thing gets the same work.
+
 ## The loop
 
 1. Read the thread file: the conversation and the `## diff` hunk say what the reviewer

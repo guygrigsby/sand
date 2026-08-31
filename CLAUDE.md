@@ -70,11 +70,28 @@ branch with `aif`, then re-creates every commit the branch adds over `<remote>/<
 - `sand comments push [pr]` — reads those files back, posts each non-empty `## reply` as a
   threaded reply to the review comment it answers, marks it `status: sent`.
 
+`pull` then starts an agent on the box on what it just wrote, over one held-open ssh, in the
+repo checkout (`~/projects/<repo>`, or `--repo-dir`), and streams its output back. The files are
+useless until something reads them and making a human ssh in to type the same prompt is the step
+that gets skipped, so this is the default rather than a flag. Nothing pending means no agent.
+`--no-agent` skips it, `--agent '<cmd>'` replaces the command for one run. Claude Code's
+`stream-json` is decoded into progress lines and anything else is passed through as is, so
+another harness still reports. Whatever happens, the threads are read back afterwards and
+printed as answered or left: an agent that died halfway is the case that matters.
+
+The prompt names only the PR, the directory and the thread count, and points at the skill for
+everything else. Two copies of the rules is two versions of the rules.
+
 PR defaults to the one for the Mac's current branch; a number or a PR URL overrides.
 
-Defaults are `guy-llm-sandbox` and `~/.sand`, so no config is needed to use it. Override in
-`~/.config/sand/config.yaml` (`host`, `remote_dir`), or with `--host` / `--remote-dir`, or
-`SAND_HOST` / `SAND_REMOTE_DIR`, in that order of precedence. `sand config` prints the file,
+Defaults are `guy-llm-sandbox`, `~/.sand` and the `claude` harness with no model named, so no
+config is needed to use it. Override in `~/.config/sand/config.yaml` (`host`, `remote_dir`,
+`harness`, `model`), or with `--host` / `--remote-dir`, or `SAND_<KEY>` in the environment, in
+that order of precedence. `harness` is which agent CLI `pull` starts (`claude` or `pi`, from the
+one harness table) and `model` is what to pass it, in that harness's own spelling. An empty
+model is a real answer: the harness picks, which is the only answer that does not go stale every
+time a model ships. Neither has a flag, because only `pull` reads them and it already has
+`--agent` for a one-off. `sand config` prints the file,
 `sand config init` writes a starter one, `sand config set <key> <value>...` sets any key, and
 `sand config get <key>` prints one effective value and nothing else, for scripts and the
 Makefile (`get` applies env and the defaults; `config` only shows what the file says).
@@ -123,10 +140,16 @@ actually installed on that machine at that one file. The program owns this, not 
 the binary is what carries the text, and the machine that needs the skill may have no checkout
 and no `make`.
 
-| harness | present when | link |
-|---|---|---|
-| pi | `~/.pi` exists | `~/.pi/agent/skills/sand.md` |
-| Claude Code | `~/.claude` exists | `~/.claude/skills/sand/SKILL.md` |
+| harness | present when | link | headless run |
+|---|---|---|---|
+| pi | `~/.pi` exists | `~/.pi/agent/skills/sand.md` | `pi --print`, `--model` |
+| claude | `~/.claude` exists | `~/.claude/skills/sand/SKILL.md` | `claude --print --verbose --output-format stream-json --permission-mode bypassPermissions`, `--model` |
+
+One table (`harnesses` in `skill.go`) answers both "which harnesses does this tool know" and
+"how do I start one", because they are the same question and two lists would disagree. The name
+is the `harness` config value as well as what `skill install` prints. `bypassPermissions` is
+there because an unattended headless run denies every tool it would otherwise ask about,
+including the edits and the `make check` it is being told to do.
 
 Neither harness discovers a top-level `.md` in `~/.agents/skills/` (pi ignores root files there
 and reads nested ones; Claude Code does not look there at all), so the canonical path needs the

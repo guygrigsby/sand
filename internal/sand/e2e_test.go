@@ -6,9 +6,11 @@ package sand
 // the reply POST and the sent marking — is the actual implementation.
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -97,10 +99,14 @@ func harness(t *testing.T) (remoteBase, ghLog string) {
 	flagHost = "box"
 	flagRemoteDir = remoteBase
 	flagPR = "42"
+	flagRemote = "origin"
 	flagDryRun, flagAll = false, false
+	// Starting an agent is pull's job, not every test's: the ones about it opt in.
+	flagNoAgent, flagAgent, flagRepoDir = true, "", ""
 	betweenPosts = 0
 	t.Cleanup(func() {
-		flagHost, flagRemoteDir, flagPR = "", "", ""
+		flagHost, flagRemoteDir, flagPR, flagRemote = "", "", "", ""
+		flagNoAgent, flagAgent, flagRepoDir = false, "", ""
 		betweenPosts = 0
 	})
 	return remoteBase, ghLog
@@ -202,6 +208,129 @@ func TestPullThenPush(t *testing.T) {
 	if strings.Count(after, "/replies") != 1 {
 		t.Errorf("re-push posted again (log grew from %d to %d):\n%s", before, len(after), after)
 	}
+}
+
+// fakeAgent stands in for claude on the box: it records where it ran and what it was
+// asked, answers the thread the way an agent would, and reports in stream-json.
+const fakeAgent = `#!/bin/sh
+{ pwd; echo "$@"; } > "$AGENT_LOG"
+for f in "$SAND_PR_DIR"/c-*.md; do
+  printf '\n%s\n' "Closed the fd in both paths." >> "$f"
+  sed -i 's/^commit: .*/commit: deadbee/' "$f"
+done
+echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"internal/foo.go"}},{"type":"text","text":"fixing the leak"}]}}'
+echo 'plain line from some other agent'
+echo '{"type":"result","subtype":"success","result":"Answered 1 thread."}'
+`
+
+// pull is not done when the files land: an agent on the box has to be started on them, or
+// the loop needs a human to ssh in and type the prompt, which is the step that gets skipped.
+func TestPullStartsTheAgentAndReportsBack(t *testing.T) {
+	remoteBase, _ := harness(t)
+	prDir := filepath.Join(remoteBase, "o", "r", "pr-42")
+	home := os.Getenv("HOME")
+
+	// The agent runs in the repo checkout, which on the box is ~/projects/<repo>.
+	checkout := filepath.Join(home, "projects", "r")
+	if err := os.MkdirAll(checkout, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	agentLog := filepath.Join(home, "agent.log")
+	agent := filepath.Join(home, "fake-agent")
+	if err := os.WriteFile(agent, []byte(fakeAgent), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AGENT_LOG", agentLog)
+	t.Setenv("SAND_PR_DIR", prDir)
+
+	flagNoAgent = false
+	flagAgent = agent
+	out := captureStdout(t)
+
+	if err := runPull(nil); err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+
+	ran := read(t, agentLog)
+	cwd, prompt, _ := strings.Cut(strings.TrimSpace(ran), "\n")
+	if cwd != checkout {
+		t.Errorf("agent ran in %q, want the checkout %q", cwd, checkout)
+	}
+	for _, want := range []string{"sand skill", prDir, "o/r#42", "make check", "do not push"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+
+	printed := out()
+	for _, want := range []string{
+		"· Read internal/foo.go", // stream-json turned into progress
+		"fixing the leak",
+		"plain line from some other agent", // anything else passes through
+		"Answered 1 thread.",
+		"answered c-2043881.md", // read back off the box afterwards
+		"deadbee",
+		"next: sand up 42",
+	} {
+		if !strings.Contains(printed, want) {
+			t.Errorf("output missing %q:\n%s", want, printed)
+		}
+	}
+}
+
+// Everything already answered and posted: starting an agent there costs a turn to be told
+// there is nothing to do.
+func TestPullSkipsTheAgentWhenNothingIsPending(t *testing.T) {
+	remoteBase, _ := harness(t)
+	if err := runPull(nil); err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	p := filepath.Join(remoteBase, "o", "r", "pr-42", "c-2043881.md")
+	if err := os.WriteFile(p, []byte(read(t, p)+"\nAnswered.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runPush(nil); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+
+	flagNoAgent = false
+	flagAgent = filepath.Join(t.TempDir(), "never-runs") // running this would fail
+	out := captureStdout(t)
+	if err := runPull(nil); err != nil {
+		t.Fatalf("re-pull: %v", err)
+	}
+	if printed := out(); !strings.Contains(printed, "nothing pending") {
+		t.Errorf("started an agent with everything sent:\n%s", printed)
+	}
+}
+
+// captureStdout collects what the commands print, since progress reporting is the feature
+// under test here rather than a side effect.
+func captureStdout(t *testing.T) func() string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	real := os.Stdout
+	os.Stdout = w
+	done := make(chan string, 1)
+	go func() {
+		b, _ := io.ReadAll(r)
+		done <- string(b)
+	}()
+	var got string
+	var once sync.Once
+	read := func() string {
+		once.Do(func() {
+			os.Stdout = real
+			w.Close()
+			got = <-done
+		})
+		return got
+	}
+	t.Cleanup(func() { read() })
+	return read
 }
 
 // With no PR argument, the PR comes from the branch checked out on the Mac.

@@ -1,6 +1,7 @@
 package sand
 
 import (
+	"cmp"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,6 +22,9 @@ var (
 	flagBase      string
 	flagYes       bool
 	flagPush      bool
+	flagAgent     string
+	flagNoAgent   bool
+	flagRepoDir   string
 )
 
 // betweenPosts is a base courtesy delay between reply POSTs. The replies endpoint sends
@@ -151,13 +155,20 @@ func commentsCmd() *cobra.Command {
 		Long: "Fetches the unresolved inline review threads (plus review summary bodies as\n" +
 			"context) for a PR and writes them to <remote-dir>/<owner>/<repo>/pr-<n>/ on the\n" +
 			"sandbox, one markdown file per thread. Safe to re-run: replies already drafted on\n" +
-			"the box are preserved.",
+			"the box are preserved.\n\n" +
+			"Then starts an agent on the box in that repo's checkout to work the threads, and\n" +
+			"holds the ssh open, streaming what it does. Ctrl-C stops watching and stops the\n" +
+			"agent; the files stay, so a re-run picks up where it left off. --no-agent leaves\n" +
+			"the files for a human or an agent already sitting on the box.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error { return runPull(args) },
 	}
 	pull.Flags().StringVar(&flagPR, "pr", "", "PR number or URL (default: the PR for the current branch)")
 	pull.Flags().BoolVar(&flagAll, "all", false, "include threads already resolved on GitHub")
 	pull.Flags().BoolVar(&flagDryRun, "dry-run", false, "show what would be written, send nothing")
+	pull.Flags().BoolVar(&flagNoAgent, "no-agent", false, "write the files and stop, starting nothing on the box")
+	pull.Flags().StringVar(&flagAgent, "agent", "", "run this command on the box instead of the configured harness")
+	pull.Flags().StringVar(&flagRepoDir, "repo-dir", "", "checkout on the box to run it in (default ~/projects/<repo>)")
 
 	push := &cobra.Command{
 		Use:   "push [pr-number|pr-url]",
@@ -361,14 +372,90 @@ func runPull(args []string) error {
 		fmt.Printf("  %-14s %-28s @%-16s %s\n", t.Filename(), t.Location(), t.Meta.Author, t.Meta.Status)
 	}
 
+	// An agent with nothing pending would read the files, find them all answered and
+	// spend a turn saying so.
+	start := !flagNoAgent && len(threads)-replied > 0
+	var run AgentRun
+	if start {
+		argv := strings.Fields(flagAgent)
+		if len(argv) == 0 {
+			if argv, err = agentCommand(cfg); err != nil {
+				return err
+			}
+		}
+		run = AgentRun{
+			Host:    cfg.Host,
+			Dir:     cmp.Or(flagRepoDir, checkoutDir(target)),
+			Command: argv,
+			Prompt:  agentPrompt(target, remotePath, len(threads)-replied),
+			Out:     os.Stdout,
+		}
+	}
+
 	if flagDryRun {
 		fmt.Printf("dry run: would write the above to %s:%s\n", cfg.Host, remotePath)
+		if start {
+			fmt.Printf("dry run: would run in %s:%s\n  %s <prompt>\n",
+				cfg.Host, run.Dir, strings.Join(run.Command, " "))
+		}
 		return nil
 	}
 	if err := sendDir(cfg.Host, outDir, remotePath); err != nil {
 		return err
 	}
 	fmt.Printf("→ %s:%s (start at index.md)\n", cfg.Host, remotePath)
+	if !start {
+		if flagNoAgent {
+			return nil
+		}
+		fmt.Println("nothing pending, so no agent started")
+		return nil
+	}
+
+	fmt.Printf("\nstarting the agent in %s:%s, Ctrl-C to stop it\n\n", cfg.Host, run.Dir)
+	agentErr := RunAgent(run)
+	// Report either way: the agent may have answered most of the threads before it died,
+	// and knowing which is the difference between re-running and reading them by hand.
+	if err := reportProgress(cfg, target, remotePath); err != nil {
+		warn(fmt.Sprintf("could not read the threads back: %v", err))
+	}
+	return agentErr
+}
+
+// reportProgress says which threads came back answered, and what to run next. This is the
+// half of "hold the tunnel open" that matters after the agent has stopped talking.
+func reportProgress(cfg Config, target Target, remotePath string) error {
+	dir, err := fetchDir(cfg.Host, remotePath)
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	files, _, err := loadThreadFiles(dir)
+	if err != nil {
+		return err
+	}
+
+	var answered, left int
+	fmt.Println()
+	for _, tf := range files {
+		t := tf.thread
+		switch {
+		case t.Sent():
+			continue
+		case t.Reply != "":
+			answered++
+			fmt.Printf("  answered %-14s %-28s %s\n", t.Filename(), t.Location(), t.Meta.Commit)
+		default:
+			left++
+			fmt.Printf("  left     %-14s %s\n", t.Filename(), t.Location())
+		}
+	}
+	fmt.Printf("%d answered, %d left\n", answered, left)
+	if answered > 0 {
+		branch := cmp.Or(target.Branch, "<branch>")
+		fmt.Printf("next: sand up %d (signs %s, pushes it, then posts the replies)\n",
+			target.Number, branch)
+	}
 	return nil
 }
 
