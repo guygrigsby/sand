@@ -159,6 +159,30 @@ func TestSignAnswersBothPromptsFromOneStdin(t *testing.T) {
 	}
 }
 
+func TestSignDryRunRewritesNothing(t *testing.T) {
+	dir, remote := signRepo(t)
+	before := mustRun(t, dir, "git", "rev-parse", "feature")
+	var out strings.Builder
+	o := signOpts(&out, "y\ny\n") // answers waiting, and still nothing must happen
+	o.Yes, o.Push, o.DryRun = false, true, true
+
+	if err := Sign(o); err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	if after := mustRun(t, dir, "git", "rev-parse", "feature"); after != before {
+		t.Errorf("dry run moved the branch from %s to %s", before, after)
+	}
+	if backups := mustRun(t, dir, "git", "branch", "--list", "feature-before-signing-*"); backups != "" {
+		t.Errorf("dry run left a recovery branch: %q", backups)
+	}
+	if refs := mustRun(t, dir, "git", "--git-dir", remote, "branch", "--list", "feature"); refs != "" {
+		t.Errorf("dry run pushed: %q", refs)
+	}
+	if !strings.Contains(out.String(), "3 commit(s)") || !strings.Contains(out.String(), "dry run") {
+		t.Errorf("dry run did not report what it would sign:\n%s", out.String())
+	}
+}
+
 func TestSignRefusals(t *testing.T) {
 	t.Run("protected branch", func(t *testing.T) {
 		dir, _ := signRepo(t)

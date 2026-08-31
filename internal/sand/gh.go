@@ -114,6 +114,53 @@ func (t *Target) LoadURL() error {
 	return nil
 }
 
+// PRCommit is one commit of the pull request, carrying GitHub's own verdict on its
+// signature rather than this program's.
+type PRCommit struct {
+	SHA     string
+	Subject string
+	Reason  string // GitHub's word for why it is not verified: "unsigned", "unknown_key", ...
+}
+
+// UnverifiedCommits lists the PR's commits GitHub does not report as verified. It asks
+// GitHub rather than the local checkout on purpose: what a reply's `commit:` hash points
+// at is the pushed history, and the Mac's copy of the branch can be behind or ahead of it.
+// Paging is by hand because `gh api --paginate` concatenates JSON arrays.
+func UnverifiedCommits(t Target) ([]PRCommit, error) {
+	const perPage = 100
+	var unverified []PRCommit
+	for page := 1; ; page++ {
+		var batch []struct {
+			SHA    string `json:"sha"`
+			Commit struct {
+				Message      string `json:"message"`
+				Verification struct {
+					Verified bool   `json:"verified"`
+					Reason   string `json:"reason"`
+				} `json:"verification"`
+			} `json:"commit"`
+		}
+		path := fmt.Sprintf("repos/%s/pulls/%d/commits?per_page=%d&page=%d", t.Slug(), t.Number, perPage, page)
+		if err := ghJSON(&batch, "api", path); err != nil {
+			return nil, err
+		}
+		for _, c := range batch {
+			if c.Commit.Verification.Verified {
+				continue
+			}
+			subject, _, _ := strings.Cut(c.Commit.Message, "\n")
+			reason := c.Commit.Verification.Reason
+			if reason == "" {
+				reason = "unsigned"
+			}
+			unverified = append(unverified, PRCommit{SHA: c.SHA, Subject: subject, Reason: reason})
+		}
+		if len(batch) < perPage {
+			return unverified, nil
+		}
+	}
+}
+
 // CommitURL links a commit as it appears on the PR, which is where a reviewer reading
 // the reply wants to land.
 func (t Target) CommitURL(sha string) string {

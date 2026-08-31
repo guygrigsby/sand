@@ -20,6 +20,7 @@ case "$*" in
     printf '{"html_url":"https://github.com/o/r/pull/42#discussion_r999"}\n'
     ;;
   *"repo view"*)  echo '{"nameWithOwner":"o/r"}' ;;
+  *"/commits?"*)  cat "$GH_COMMITS" ;;
   *graphql*)      cat "$GH_FIXTURE" ;;
   *"pr view"*)    echo '{"number":42,"url":"https://github.com/o/r/pull/42","title":"Fix the thing","headRefName":"topic"}' ;;
   *) echo "fake gh: unhandled: $*" >&2; exit 1 ;;
@@ -57,6 +58,12 @@ const fixture = `{"data":{"repository":{"pullRequest":{
         "diffHunk":"@@ -10,1 +10,1 @@","author":{"login":"reviewer"}}]}}]}}}}}
 `
 
+// signedCommits is what push expects to see before it will post: GitHub reporting every
+// commit of the PR as verified. Tests that care about the other case overwrite the file.
+const signedCommits = `[{"sha":"abc1234abc1234abc1234abc1234abc1234abc12",
+  "commit":{"message":"sand: close the fd in both paths\n\nbody","verification":{"verified":true,"reason":"valid"}}}]
+`
+
 // harness puts the fakes in place and points the commands at a temp "box".
 func harness(t *testing.T) (remoteBase, ghLog string) {
 	t.Helper()
@@ -75,6 +82,7 @@ func harness(t *testing.T) (remoteBase, ghLog string) {
 	write("bin/gh", fakeGH, 0o755)
 	sshPath := write("ssh-shim", fakeSSH, 0o755)
 	fixturePath := write("fixture.json", fixture, 0o644)
+	commitsPath := write("commits.json", signedCommits, 0o644)
 
 	ghLog = filepath.Join(dir, "gh.log")
 	remoteBase = filepath.Join(dir, "box")
@@ -83,6 +91,7 @@ func harness(t *testing.T) (remoteBase, ghLog string) {
 	t.Setenv("SAND_SSH", sshPath)
 	t.Setenv("GH_LOG", ghLog)
 	t.Setenv("GH_FIXTURE", fixturePath)
+	t.Setenv("GH_COMMITS", commitsPath)
 	t.Setenv("HOME", dir) // keep any real ~/.config/sand out of it
 
 	flagHost = "box"
@@ -219,6 +228,67 @@ func TestPullDryRunTouchesNothing(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(remoteBase, "o")); !os.IsNotExist(err) {
 		t.Errorf("dry run wrote to the box: %v", err)
+	}
+}
+
+// Replies quote commit hashes, and signing rewrites them, so posting before the branch is
+// signed publishes hashes that are about to stop existing. push has to stop instead.
+func TestPushRefusesUnsignedCommits(t *testing.T) {
+	remoteBase, ghLog := harness(t)
+	if err := runPull(nil); err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	p := filepath.Join(remoteBase, "o", "r", "pr-42", "c-2043881.md")
+	if err := os.WriteFile(p, []byte(read(t, p)+"\nClosed the fd in both paths.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	unsigned := `[{"sha":"1111111111111111111111111111111111111111",
+	  "commit":{"message":"sand: close the fd\n\nbody","verification":{"verified":false,"reason":"unsigned"}}},
+	 {"sha":"2222222222222222222222222222222222222222",
+	  "commit":{"message":"sand: tests","verification":{"verified":true,"reason":"valid"}}}]`
+	if err := os.WriteFile(os.Getenv("GH_COMMITS"), []byte(unsigned), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runPush(nil)
+	if err == nil {
+		t.Fatal("push posted replies onto an unsigned branch")
+	}
+	for _, want := range []string{"1111111", "unsigned", "sand sign topic"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+	if strings.Contains(read(t, ghLog), "/replies") {
+		t.Error("a reply was posted despite the refusal")
+	}
+	if got := read(t, p); !strings.Contains(got, "status: pending") || strings.Contains(got, "discussion_r999") {
+		t.Errorf("a thread was marked sent despite the refusal:\n%s", got)
+	}
+}
+
+// The preview is worth having before the branch is signed, so --dry-run warns instead.
+func TestPushDryRunWarnsAboutUnsignedCommits(t *testing.T) {
+	remoteBase, ghLog := harness(t)
+	if err := runPull(nil); err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	p := filepath.Join(remoteBase, "o", "r", "pr-42", "c-2043881.md")
+	if err := os.WriteFile(p, []byte(read(t, p)+"\nClosed the fd.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	unsigned := `[{"sha":"1111111111111111111111111111111111111111",
+	  "commit":{"message":"sand: close the fd","verification":{"verified":false,"reason":"unsigned"}}}]`
+	if err := os.WriteFile(os.Getenv("GH_COMMITS"), []byte(unsigned), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	flagDryRun = true
+	if err := runPush(nil); err != nil {
+		t.Fatalf("dry run refused to preview: %v", err)
+	}
+	if strings.Contains(read(t, ghLog), "/replies") {
+		t.Error("dry run posted a reply")
 	}
 }
 

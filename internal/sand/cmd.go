@@ -70,6 +70,7 @@ func signCmd() *cobra.Command {
 				Base:   flagBase,
 				Yes:    flagYes,
 				Push:   flagPush,
+				DryRun: flagDryRun,
 				In:     cmd.InOrStdin(),
 				Out:    cmd.OutOrStdout(),
 			}
@@ -83,6 +84,7 @@ func signCmd() *cobra.Command {
 	c.Flags().StringVar(&flagBase, "base", "main", "base branch on that remote")
 	c.Flags().BoolVarP(&flagYes, "yes", "y", false, "skip the confirmation before rewriting")
 	c.Flags().BoolVar(&flagPush, "push", false, "push with --force-with-lease once verified, without asking")
+	c.Flags().BoolVar(&flagDryRun, "dry-run", false, "show what would be signed, rewrite nothing and push nothing")
 	return c
 }
 
@@ -349,6 +351,18 @@ func runPush(args []string) error {
 		return fmt.Errorf("nothing at %s:%s — run `sand comments pull` first", cfg.Host, remotePath)
 	}
 
+	// Every reply quotes the commit that fixed the thread, and signing the branch rewrites
+	// those hashes, so posting first publishes hashes that are about to stop existing.
+	// Only worth checking when there is something to post.
+	if pendingReplies(files) > 0 {
+		if err := requireSignedCommits(target); err != nil {
+			if !flagDryRun {
+				return err
+			}
+			warn(err.Error())
+		}
+	}
+
 	var posted, skipped int
 	for _, tf := range files {
 		f, raw, t := tf.path, tf.raw, tf.thread
@@ -408,6 +422,51 @@ func runPush(args []string) error {
 		return fmt.Errorf("%d reply(ies) failed", failed)
 	}
 	return nil
+}
+
+func pendingReplies(files []threadFile) int {
+	n := 0
+	for _, tf := range files {
+		if tf.thread.Reply != "" && !tf.thread.Sent() {
+			n++
+		}
+	}
+	return n
+}
+
+// requireSignedCommits fails when GitHub does not report every commit of the PR as
+// verified, naming the offenders and the command that fixes them.
+func requireSignedCommits(t Target) error {
+	unverified, err := UnverifiedCommits(t)
+	if err != nil {
+		return fmt.Errorf("checking commit signatures: %w", err)
+	}
+	if len(unverified) == 0 {
+		return nil
+	}
+	branch := t.Branch
+	if branch == "" {
+		branch = "<branch>"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d commit(s) on %s are not signed:", len(unverified), branch)
+	const show = 5
+	for i, c := range unverified {
+		if i == show {
+			fmt.Fprintf(&b, "\n  ... and %d more", len(unverified)-show)
+			break
+		}
+		fmt.Fprintf(&b, "\n  %s %q — %s", short(c.SHA), c.Subject, c.Reason)
+	}
+	fmt.Fprintf(&b, "\nsign them first, then push the replies:\n  sand sign %s", branch)
+	return fmt.Errorf("%s", b.String())
+}
+
+func short(sha string) string {
+	if len(sha) > 7 {
+		return sha[:7]
+	}
+	return sha
 }
 
 // composeReply is what actually lands on GitHub: the agent's words, then the commit

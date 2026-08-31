@@ -42,12 +42,16 @@ type SignOpts struct {
 	Base   string
 	Yes    bool // don't ask before rewriting
 	Push   bool // push after verifying, without asking
+	DryRun bool // run the checks, show what would be signed, rewrite nothing
 	In     io.Reader
 	Out    io.Writer
 }
 
 // Sign imports the branch, signs every commit it adds over the base, verifies the result
 // and offers to push. It returns nil having done nothing when there is nothing to sign.
+//
+// DryRun stops before the rewrite, so no history changes and nothing is pushed. It still
+// imports and fetches: which commits would be signed is not knowable without them.
 func Sign(o SignOpts) error {
 	g := gitCmd{out: o.Out}
 	var answers *bufio.Reader
@@ -112,19 +116,25 @@ func Sign(o SignOpts) error {
 		return nil
 	}
 
+	baseShort, _ := g.capture("rev-parse", "--short", base)
+	fmt.Fprintf(o.Out, "About to sign exactly %d commit(s) unique to %s\n", count, branch)
+	fmt.Fprintf(o.Out, "Comparison base: %s (%s)\n", base, baseShort)
+	fmt.Fprintf(o.Out, "Commit topology, including merges, will be preserved.\n\n")
+	if err := g.run("log", "--graph", "--oneline", "--decorate", head, "--not", base); err != nil {
+		return err
+	}
+	if o.DryRun {
+		fmt.Fprintf(o.Out, "\ndry run: history not rewritten, nothing pushed to %s\n", o.Remote)
+		return nil
+	}
+
 	backup := fmt.Sprintf("%s-before-signing-%s", strings.ReplaceAll(branch, "/", "-"), time.Now().Format("20060102150405"))
 	if err := g.run("branch", backup, head); err != nil {
 		return err
 	}
 	restore := fmt.Sprintf("restore with: git switch %s && git reset --hard %s", branch, backup)
+	fmt.Fprintf(o.Out, "\nRecovery branch: %s\n", backup)
 
-	baseShort, _ := g.capture("rev-parse", "--short", base)
-	fmt.Fprintf(o.Out, "About to sign exactly %d commit(s) unique to %s\n", count, branch)
-	fmt.Fprintf(o.Out, "Comparison base: %s (%s)\n", base, baseShort)
-	fmt.Fprintf(o.Out, "Commit topology, including merges, will be preserved.\nRecovery branch: %s\n\n", backup)
-	if err := g.run("log", "--graph", "--oneline", "--decorate", head, "--not", base); err != nil {
-		return err
-	}
 	if !o.Yes {
 		if !confirm(answers, o.Out, "\nProceed?") {
 			fmt.Fprintln(o.Out, "Cancelled. No changes made.")

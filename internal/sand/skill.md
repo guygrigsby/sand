@@ -31,8 +31,10 @@ posted, leave it alone.
 3. Commit the fix.
 4. Edit the thread file: write the reply under the `## reply` heading, and put the fixing
    commit's short hash in `commit:` in the front matter.
-5. Repeat for every pending thread, then tell the human to run `sand comments push` on the
-   Mac. That posts the replies and flips `status: sent`. You cannot do this step from here.
+5. Repeat for every pending thread, then tell the human to push the branch, run
+   `sand sign <branch>` and then `sand comments push`, on the Mac. Push posts the replies and
+   flips `status: sent`, and refuses outright while any commit on the PR is unsigned. You
+   cannot do any of this from here.
 
 ## What you may edit in a thread file
 
@@ -59,8 +61,12 @@ with a signature and force-pushes the result. Do not try to sign or rewrite hist
 
 That rewrite changes commit hashes. So a `commit:` you recorded, and a hash quoted in a reply
 already posted by `sand comments push`, will not exist on the remote once the branch is signed.
-Signing before pushing replies is the order that leaves the hashes true, so if you have replies
-waiting and the branch is unsigned, say so when you hand back rather than assuming either order.
+Signing has to come first, and `sand comments push` enforces it: if GitHub reports any commit
+on the PR as unverified it refuses to post anything and prints `sand sign <branch>`.
+
+What that means for you: after the last fix is committed, tell the human to push the branch,
+run `sand sign <branch>`, and only then `sand comments push`. If a hash you recorded in
+`commit:` came from before a signing run, it is stale, so re-pull and record the new one.
 
 ## This file
 
