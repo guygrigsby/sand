@@ -90,7 +90,7 @@ func TestSignSignsEveryBranchCommitAndKeepsTheMerge(t *testing.T) {
 	var out strings.Builder
 
 	// "n" declines the push, so this asserts the rewrite alone.
-	if err := Sign(signOpts(&out, "n\n")); err != nil {
+	if _, err := Sign(signOpts(&out, "n\n")); err != nil {
 		t.Fatalf("%v\n%s", err, out.String())
 	}
 
@@ -123,13 +123,95 @@ func TestSignSignsEveryBranchCommitAndKeepsTheMerge(t *testing.T) {
 	}
 }
 
+// Review is a loop: round one signs, and the hashes it produced get quoted in replies that
+// are posted to GitHub. Round two must sign only what the agent added, because re-signing an
+// already-signed commit gives it a new hash and every reply quoting the old one goes stale.
+func TestSignOnlySignsWhatIsNotSignedYet(t *testing.T) {
+	dir, _ := signRepo(t)
+	var out strings.Builder
+	if _, err := Sign(signOpts(&out, "n\n")); err != nil {
+		t.Fatalf("first round: %v\n%s", err, out.String())
+	}
+	roundOne := strings.Fields(mustRun(t, dir, "git", "rev-list", "feature", "--not", "origin/main"))
+	if len(roundOne) != 3 {
+		t.Fatalf("first round left %d commits, want 3", len(roundOne))
+	}
+
+	// The agent on the box answers another thread, so one more unsigned commit lands on top.
+	commit(t, dir, "c.txt", "c\n", "feature: c")
+
+	out.Reset()
+	res, err := Sign(signOpts(&out, "n\n"))
+	if err != nil {
+		t.Fatalf("second round: %v\n%s", err, out.String())
+	}
+	if res.Total != 4 || res.Rewritten != 1 || res.Kept != 3 {
+		t.Errorf("signed %d of %d with %d kept, want 1 of 4 with 3 kept\n%s",
+			res.Rewritten, res.Total, res.Kept, out.String())
+	}
+
+	// Hash equality alone does not prove the range was narrowed: an ssh ed25519 signature over
+	// the same bytes is the same bytes, so re-signing this repo's commits happens to reproduce
+	// them. An OpenPGP signature carries its creation time and does not, which is the case the
+	// narrowing is for. filter-branch's own "(n/m)" is the count of what it was handed.
+	if !strings.Contains(out.String(), "(1/1)") {
+		t.Errorf("filter-branch was given more than the one unsigned commit:\n%s", out.String())
+	}
+
+	now := map[string]bool{}
+	for _, sha := range strings.Fields(mustRun(t, dir, "git", "rev-list", "feature", "--not", "origin/main")) {
+		now[sha] = true
+		if raw := mustRun(t, dir, "git", "cat-file", "commit", sha); !hasSignature(raw) {
+			t.Errorf("%s came out of the second round unsigned", sha)
+		}
+	}
+	for _, sha := range roundOne {
+		if !now[sha] {
+			t.Errorf("second round moved %s, which a posted reply already quotes\n%s", sha, out.String())
+		}
+	}
+	if len(now) != 4 {
+		t.Errorf("branch has %d commits after the second round, want 4", len(now))
+	}
+}
+
+// Nothing new on the branch: the whole run is a no-op, and in particular does not rewrite
+// history for the sake of it.
+func TestSignSkipsAFullySignedBranch(t *testing.T) {
+	dir, _ := signRepo(t)
+	var out strings.Builder
+	if _, err := Sign(signOpts(&out, "n\n")); err != nil {
+		t.Fatalf("first round: %v\n%s", err, out.String())
+	}
+	before := mustRun(t, dir, "git", "rev-parse", "feature")
+	backupsBefore := mustRun(t, dir, "git", "branch", "--list", "feature-before-signing-*")
+
+	out.Reset()
+	res, err := Sign(signOpts(&out, "n\n"))
+	if err != nil {
+		t.Fatalf("second round: %v\n%s", err, out.String())
+	}
+	if res.Rewritten != 0 || res.Kept != 3 {
+		t.Errorf("res = %+v, want nothing rewritten and 3 kept", res)
+	}
+	if after := mustRun(t, dir, "git", "rev-parse", "feature"); after != before {
+		t.Errorf("branch moved from %s to %s with nothing to sign", before, after)
+	}
+	if got := mustRun(t, dir, "git", "branch", "--list", "feature-before-signing-*"); got != backupsBefore {
+		t.Errorf("made a recovery branch for a no-op: %q then %q", backupsBefore, got)
+	}
+	if !strings.Contains(out.String(), "signed already") {
+		t.Errorf("output did not say the branch was already signed:\n%s", out.String())
+	}
+}
+
 func TestSignPushesWhenAsked(t *testing.T) {
 	dir, remote := signRepo(t)
 	var out strings.Builder
 
 	o := signOpts(&out, "")
 	o.Push = true
-	if err := Sign(o); err != nil {
+	if _, err := Sign(o); err != nil {
 		t.Fatalf("%v\n%s", err, out.String())
 	}
 
@@ -148,7 +230,7 @@ func TestSignAnswersBothPromptsFromOneStdin(t *testing.T) {
 	o := signOpts(&out, "y\ny\n")
 	o.Yes = false
 
-	if err := Sign(o); err != nil {
+	if _, err := Sign(o); err != nil {
 		t.Fatalf("%v\n%s", err, out.String())
 	}
 
@@ -166,7 +248,7 @@ func TestSignDryRunRewritesNothing(t *testing.T) {
 	o := signOpts(&out, "y\ny\n") // answers waiting, and still nothing must happen
 	o.Yes, o.Push, o.DryRun = false, true, true
 
-	if err := Sign(o); err != nil {
+	if _, err := Sign(o); err != nil {
 		t.Fatalf("%v\n%s", err, out.String())
 	}
 	if after := mustRun(t, dir, "git", "rev-parse", "feature"); after != before {
@@ -183,12 +265,57 @@ func TestSignDryRunRewritesNothing(t *testing.T) {
 	}
 }
 
+// The box commits without a key, so the hash an agent writes into `commit:` is the hash of
+// an unsigned commit that signing then replaces. Every state of that lookup matters: the
+// wrong answer either posts a dead link or refuses a good one.
+func TestCommitOnBranch(t *testing.T) {
+	dir, _ := signRepo(t)
+	g := gitCmd{out: &strings.Builder{}}
+
+	// A commit that exists but never reaches the branch: nothing on the branch matches it.
+	mustRun(t, dir, "git", "switch", "--quiet", "-c", "elsewhere")
+	commit(t, dir, "d.txt", "d\n", "elsewhere: unrelated work")
+	orphan := mustRun(t, dir, "git", "rev-parse", "--short", "HEAD")
+	mustRun(t, dir, "git", "switch", "--quiet", "feature")
+
+	recorded := mustRun(t, dir, "git", "rev-parse", "--short", "HEAD") // what the agent wrote down
+	var out strings.Builder
+	if _, err := Sign(signOpts(&out, "y\n")); err != nil { // "y" pushes it, so origin/feature exists
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	signed := mustRun(t, dir, "git", "rev-parse", "--short=7", "HEAD")
+
+	for _, tc := range []struct {
+		name  string
+		hash  string
+		ref   string
+		want  commitState
+		hash2 string // the hash a reply should quote
+	}{
+		{"signing moved it", recorded, "origin/feature", commitMoved, signed},
+		{"already on the branch", signed, "origin/feature", commitCurrent, signed},
+		{"not on the branch at all", orphan, "origin/feature", commitGone, orphan},
+		{"no such branch here", recorded, "origin/nope", commitUnknown, recorded},
+		{"no such commit here", "0000000", "origin/feature", commitUnknown, "0000000"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, state := commitOnBranch(g, tc.hash, tc.ref)
+			if state != tc.want {
+				t.Errorf("state = %d, want %d", state, tc.want)
+			}
+			if got != tc.hash2 {
+				t.Errorf("hash = %q, want %q", got, tc.hash2)
+			}
+		})
+	}
+}
+
 func TestSignRefusals(t *testing.T) {
 	t.Run("protected branch", func(t *testing.T) {
 		dir, _ := signRepo(t)
 		mustRun(t, dir, "git", "switch", "--quiet", "main")
 		var out strings.Builder
-		err := Sign(signOpts(&out, ""))
+		_, err := Sign(signOpts(&out, ""))
 		if err == nil || !strings.Contains(err.Error(), "protected") {
 			t.Fatalf("err = %v, want a refusal to rewrite main", err)
 		}
@@ -200,7 +327,7 @@ func TestSignRefusals(t *testing.T) {
 			t.Fatal(err)
 		}
 		var out strings.Builder
-		err := Sign(signOpts(&out, ""))
+		_, err := Sign(signOpts(&out, ""))
 		if err == nil || !strings.Contains(err.Error(), "uncommitted") {
 			t.Fatalf("err = %v, want a refusal on a dirty tree", err)
 		}
@@ -210,7 +337,7 @@ func TestSignRefusals(t *testing.T) {
 		dir, _ := signRepo(t)
 		mustRun(t, dir, "git", "switch", "--quiet", "-c", "empty", "origin/main")
 		var out strings.Builder
-		if err := Sign(signOpts(&out, "")); err != nil {
+		if _, err := Sign(signOpts(&out, "")); err != nil {
 			t.Fatal(err)
 		}
 		if !strings.Contains(out.String(), "nothing to sign") {
@@ -225,7 +352,7 @@ func TestSignRefusals(t *testing.T) {
 		signRepo(t)
 		t.Setenv("SAND_AIF", filepath.Join(t.TempDir(), "not-installed"))
 		var out strings.Builder
-		err := Sign(signOpts(&out, ""))
+		_, err := Sign(signOpts(&out, ""))
 		if err == nil || !strings.Contains(err.Error(), "not on PATH") {
 			t.Fatalf("err = %v, want a stop on the missing import tool", err)
 		}
@@ -237,7 +364,7 @@ func TestSignRefusals(t *testing.T) {
 		var out strings.Builder
 		o := signOpts(&out, "no\n")
 		o.Yes = false
-		if err := Sign(o); err != nil {
+		if _, err := Sign(o); err != nil {
 			t.Fatal(err)
 		}
 		if after := mustRun(t, dir, "git", "rev-parse", "feature"); after != before {

@@ -77,7 +77,8 @@ func signCmd() *cobra.Command {
 			if len(args) > 0 {
 				o.Branch = args[0]
 			}
-			return Sign(o)
+			_, err := Sign(o)
+			return err
 		},
 	}
 	c.Flags().StringVar(&flagRemote, "remote", "origin", "remote to compare against and push to")
