@@ -41,7 +41,7 @@ ship:
 # Mac from box, run on the Mac, in the Mac's copy. The usual direction, so it takes no
 # arguments; BOX only needs naming for a different box.
 sync:
-	@case "x$(BOX)" in x) echo "no box: pass BOX=<alias> or run \`sand config set host <alias>\`"; exit 1;; \
+	@case "x$(BOX)" in x) echo "no box: pass BOX=<alias> or run \`sand config init\`"; exit 1;; \
 	  *[[:space:]]*) echo "BOX is not one host: $(BOX)"; exit 1;; esac
 	rsync -a --delete --exclude build $(BOX):projects/sand/ ./
 	$(MAKE) install

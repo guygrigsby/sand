@@ -61,17 +61,26 @@ var harnesses = []agentHarness{
 	},
 }
 
+// harnessNames is every harness this tool knows, in table order, for error messages and the
+// `harness` comment in the config file. Reading them off the table is the point: a second
+// hand-written list is a list that ends up naming a set that is no longer the set.
+func harnessNames() []string {
+	names := make([]string, 0, len(harnesses))
+	for _, h := range harnesses {
+		names = append(names, h.Name)
+	}
+	return names
+}
+
 // findHarness resolves the `harness` config value.
 func findHarness(name string) (agentHarness, error) {
-	var known []string
 	for _, h := range harnesses {
 		if h.Name == name {
 			return h, nil
 		}
-		known = append(known, h.Name)
 	}
 	return agentHarness{}, fmt.Errorf("unknown harness %q; known: %s (`sand config set harness <name>`)",
-		name, strings.Join(known, ", "))
+		name, strings.Join(harnessNames(), ", "))
 }
 
 // SkillInstall is what an install did, so the caller can print it and a test can assert it.

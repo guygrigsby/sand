@@ -336,7 +336,7 @@ func configCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			b, err := os.ReadFile(ConfigPath())
 			if os.IsNotExist(err) {
-				return fmt.Errorf("%s does not exist yet (try `sand config init --host <alias>`)", ConfigPath())
+				return fmt.Errorf("%s does not exist yet (try `sand config init`)", ConfigPath())
 			} else if err != nil {
 				return err
 			}
@@ -346,13 +346,25 @@ func configCmd() *cobra.Command {
 	}
 	init := &cobra.Command{
 		Use:   "init",
-		Short: "Write a starter config file",
+		Short: "Create the config file, or bring an existing one up to date",
+		Long: "Writes every key this version knows, with its comment, keeping every value the\n" +
+			"file already holds, so running it twice writes the same file twice and a config\n" +
+			"written by an older sand gains the keys added since.\n\n" +
+			"Asks for the sandbox host when neither --host nor the file already names one.\n" +
+			"There is no default for it: it names one machine on one tailnet.",
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			p, err := WriteDefault(flagHost)
+			out := cmd.OutOrStdout()
+			p, err := InitConfig(flagHost, cmd.InOrStdin(), out)
 			if err != nil {
 				return err
 			}
-			fmt.Println("wrote", p)
+			fmt.Fprintln(out, "wrote", p)
+			// An unattended run answers no prompt, so say what is still missing rather
+			// than let the next command be the one to discover it.
+			if v, _ := Get("host"); v == "" {
+				warn("no host yet: `sand config set host <alias>` before anything that talks to the box")
+			}
 			return nil
 		},
 	}

@@ -1,7 +1,9 @@
 package sand
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -19,11 +21,6 @@ type Config struct {
 }
 
 const (
-	// There is exactly one sandbox, and this is the alias the Mac reaches it by, so it
-	// is a default rather than something to configure before the tool works at all. The
-	// login user is the Mac's ssh config to decide, not this program's; a Mac whose tailnet
-	// refuses its local username sets it there or with `sand config set host <user>@<box>`.
-	defaultHost      = "guy-llm-sandbox"
 	defaultRemoteDir = "~/.sand"
 	defaultHarness   = "claude"
 )
@@ -31,10 +28,14 @@ const (
 // configDefault is what a key falls back to when neither the file nor the environment says.
 // Keyed by config key so a new field defaults, documents and overrides itself through the
 // same three tables rather than another if-empty line in Load.
-// An empty default is a real answer: no model means the harness picks, which is the only
-// answer that does not go stale every time a model ships.
+//
+// An empty default is a real answer, for two different reasons. No model means the harness
+// picks, which is the only answer that does not go stale every time a model ships. No host
+// means there is nothing sensible to guess: it names one specific machine on one specific
+// tailnet, and a compiled-in alias is either someone else's box or an alias that resolves
+// nowhere. `sand config init` asks for it instead, and every command that needs it says so.
 var configDefault = map[string]string{
-	"host":       defaultHost,
+	"host":       "",
 	"remote_dir": defaultRemoteDir,
 	"harness":    defaultHarness,
 	"model":      "",
@@ -83,10 +84,10 @@ func Load() (Config, error) {
 	return fill(), nil
 }
 
-// Resolve settles every value: flag, then SAND_<KEY> in the environment, then the file,
-// then the default. Only host and remote dir have flags, because they are the two the
-// other commands take.
-func Resolve(hostFlag, remoteDirFlag string) (Config, error) {
+// effective is the file with the environment over it and the defaults under it, checked
+// for nothing. Get needs that separately from Resolve: asking for `harness` must not fail
+// because `host` is unset, which is the state of every machine before `config init` runs.
+func effective() (Config, error) {
 	c, err := Load()
 	if err != nil {
 		return c, err
@@ -96,6 +97,18 @@ func Resolve(hostFlag, remoteDirFlag string) (Config, error) {
 			*f.ptr = v
 		}
 	}
+	return c, nil
+}
+
+// Resolve settles every value for a command that is about to talk to the box: flag, then
+// SAND_<KEY> in the environment, then the file, then the default. Only host and remote dir
+// have flags, because they are the two the other commands take. A missing host is an error
+// here and only here: this is the point where one is actually needed.
+func Resolve(hostFlag, remoteDirFlag string) (Config, error) {
+	c, err := effective()
+	if err != nil {
+		return c, err
+	}
 	if hostFlag != "" {
 		c.Host = hostFlag
 	}
@@ -103,7 +116,7 @@ func Resolve(hostFlag, remoteDirFlag string) (Config, error) {
 		c.RemoteDir = remoteDirFlag
 	}
 	if c.Host == "" {
-		return c, fmt.Errorf("no sandbox host: pass --host, set SAND_HOST, or write %s", ConfigPath())
+		return c, fmt.Errorf("no sandbox host: run `sand config init`, pass --host, or set SAND_HOST")
 	}
 	return c, nil
 }
@@ -112,11 +125,15 @@ func Resolve(hostFlag, remoteDirFlag string) (Config, error) {
 // and this, rather than round-tripped, so `config set` cannot lose the documentation and a
 // new field needs nothing here but its own line.
 var configDoc = map[string]string{
-	"host": "ssh alias or user@host for the sandbox; ~/.ssh/config resolves key, user, port.",
+	"host": "ssh alias or user@host for the sandbox; ~/.ssh/config resolves key, user, port.\n" +
+		"# Required, and asked for by `sand config init`: there is no sensible default.",
 	"remote_dir": "base dir on the sandbox. Per-PR files land in\n" +
 		"# <remote_dir>/<owner>/<repo>/pr-<number>/.",
-	"harness": "agent CLI `comments pull` starts on the box to work the threads: claude or\n" +
-		"# pi. `pull --no-agent` starts nothing; `pull --agent '<cmd>'` runs something else once.",
+	// The harness names come off the harnesses table rather than being retyped, so adding
+	// one cannot leave this comment naming a set that is no longer the set.
+	"harness": "agent CLI `comments pull` starts on the box to work the threads: " +
+		strings.Join(harnessNames(), " or ") + ".\n" +
+		"# `pull --no-agent` starts nothing; `pull --agent '<cmd>'` runs something else once.",
 	"model": "model to run it with, in that harness's own spelling. Empty means the\n" +
 		"# harness's default.",
 }
@@ -156,8 +173,10 @@ func ConfigKeys() []string {
 
 // Get returns the effective value of one key: the file, with env and the defaults applied,
 // which is what another program (the Makefile) needs to reach the same box this tool would.
+// An unset host comes back empty rather than as an error, because empty is the true answer
+// and the Makefile already refuses a blank box with a better message than this one could.
 func Get(key string) (string, error) {
-	c, err := Resolve("", "")
+	c, err := effective()
 	if err != nil {
 		return "", err
 	}
@@ -194,21 +213,54 @@ func Set(pairs [][2]string) (string, error) {
 	return p, writeConfig(c)
 }
 
-// WriteDefault creates the config file with a commented template, refusing to clobber
-// an existing one.
-func WriteDefault(host string) (string, error) {
+// InitConfig creates the config file, or brings an existing one up to date: every key this
+// version of Config has, with this version's comments, and every value the file already
+// held. Running it again writes the same bytes, so a setup script, a fresh Mac and a Mac
+// that has been through three versions of the tool all end up at the same file, and none of
+// them has to know which case it is in. That is worth more than the old behaviour of
+// refusing to touch a file that exists: refusing means there is no command that adds a key
+// added since the file was written.
+//
+// It writes no defaulted value, for the same reason `Set` does not: a `remote_dir:` line
+// holding today's default is indistinguishable from one the operator chose, so tomorrow's
+// default would never reach this machine. The keys are present and empty, with the default
+// named in the comment above them.
+//
+// The host is the exception, being the one key with no default. It is asked for when
+// neither the flag nor the file already answers.
+func InitConfig(host string, in io.Reader, out io.Writer) (string, error) {
 	p := ConfigPath()
-	if _, err := os.Stat(p); err == nil {
-		return p, fmt.Errorf("%s already exists", p)
-	}
-	var c Config
-	for _, f := range configFields(&c) {
-		*f.ptr = configDefault[f.Key]
+	c, err := loadFile()
+	if err != nil {
+		return p, err
 	}
 	if host != "" {
 		c.Host = host
 	}
+	if c.Host == "" {
+		c.Host = ask(in, out, "sandbox ssh alias or user@host")
+	}
 	return p, writeConfig(c)
+}
+
+// ask reads one line. An empty answer, EOF or no reader at all comes back empty, so an
+// unattended run (a setup script, a test) writes the file without a host rather than
+// blocking on a prompt nobody is there to answer or inventing a value.
+//
+// One question, so one reader. A second question here shares this reader rather than making
+// its own: a bufio.Reader reads ahead, so the second one eats the first one's answer. See
+// confirm in sign.go, where that silently turned a "yes, push" into a branch left unpushed.
+func ask(in io.Reader, out io.Writer, question string) string {
+	if in == nil {
+		return ""
+	}
+	fmt.Fprintf(out, "%s: ", question)
+	line, err := bufio.NewReader(in).ReadString('\n')
+	if err != nil && line == "" {
+		fmt.Fprintln(out)
+		return ""
+	}
+	return strings.TrimSpace(line)
 }
 
 // writeConfig renders the whole file: one commented key per Config field, values as they
@@ -219,6 +271,12 @@ func writeConfig(c Config) error {
 	for _, f := range configFields(&c) {
 		if doc := configDoc[f.Key]; doc != "" {
 			fmt.Fprintf(&b, "# %s: %s\n", f.Key, doc)
+		}
+		// The default is named here rather than written as the value, so an empty key
+		// still tells the reader what it will do and a later change to the default
+		// still reaches this machine.
+		if d := configDefault[f.Key]; d != "" {
+			fmt.Fprintf(&b, "# Unset means %s.\n", d)
 		}
 		v := *f.ptr
 		if v == "" {

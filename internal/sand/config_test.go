@@ -1,7 +1,9 @@
 package sand
 
 import (
+	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -71,7 +73,9 @@ func TestSetDoesNotBakeInDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(body), defaultRemoteDir) {
+	// As a value, not as the comment naming it: the comment is how an empty key still
+	// tells the reader what it will do.
+	if strings.Contains(string(body), "remote_dir: "+defaultRemoteDir) {
 		t.Errorf("wrote the default remote_dir into the file:\n%s", body)
 	}
 	c, err := Load()
@@ -88,8 +92,15 @@ func TestSetDoesNotBakeInDefaults(t *testing.T) {
 func TestGetEffectiveValue(t *testing.T) {
 	configHome(t)
 
-	if v, err := Get("host"); err != nil || v != defaultHost {
-		t.Fatalf("with no config file: %q, %v; want the default", v, err)
+	// The host has no default, so with no file the true answer is empty, and asking for
+	// it must not be an error: the Makefile reads this and prints its own message.
+	if v, err := Get("host"); err != nil || v != "" {
+		t.Fatalf("with no config file: %q, %v; want empty", v, err)
+	}
+	// A key that does have a default still answers on a machine with no host at all.
+	// This went through Resolve once, which meant an unset host failed every get.
+	if v, err := Get("remote_dir"); err != nil || v != defaultRemoteDir {
+		t.Fatalf("get remote_dir with no host: %q, %v; want the default", v, err)
 	}
 	if _, err := Set([][2]string{{"host", "ubuntu@box"}}); err != nil {
 		t.Fatal(err)
@@ -114,6 +125,135 @@ func TestSetRejectsUnknownKey(t *testing.T) {
 	}
 	if _, statErr := os.Stat(ConfigPath()); !os.IsNotExist(statErr) {
 		t.Error("a rejected key still wrote a file")
+	}
+}
+
+// init has to be safe to run again: same file, same bytes, whatever state it starts from.
+// A setup script that has to know whether the config already exists is a setup script that
+// gets it wrong.
+func TestInitIsIdempotent(t *testing.T) {
+	configHome(t)
+
+	if _, err := InitConfig("", strings.NewReader("first-box\n"), io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	first := read(t, ConfigPath())
+
+	// Second run: a different answer waiting on stdin, which must never be read, because
+	// the file already names a host.
+	if _, err := InitConfig("", strings.NewReader("second-box\n"), io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if second := read(t, ConfigPath()); second != first {
+		t.Errorf("second init changed the file:\n%s\nwant:\n%s", second, first)
+	}
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Host != "first-box" {
+		t.Errorf("host = %q, want the answer from the first run", c.Host)
+	}
+}
+
+// The prompt is the only way in for the one key with no default, so it has to reach the
+// file; and --host has to win over asking at all.
+func TestInitAsksForTheHost(t *testing.T) {
+	configHome(t)
+
+	var prompt strings.Builder
+	if _, err := InitConfig("", strings.NewReader("  ubuntu@box  \n"), &prompt); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := Load(); c.Host != "ubuntu@box" {
+		t.Errorf("host = %q, want the trimmed answer", c.Host)
+	}
+	if !strings.Contains(prompt.String(), "sandbox ssh alias") {
+		t.Errorf("no prompt was printed, got %q", prompt.String())
+	}
+
+	configHome(t)
+	var quiet strings.Builder
+	if _, err := InitConfig("flag-box", strings.NewReader("typed-box\n"), &quiet); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := Load(); c.Host != "flag-box" {
+		t.Errorf("host = %q, want --host to win", c.Host)
+	}
+	if quiet.String() != "" {
+		t.Errorf("asked anyway: %q", quiet.String())
+	}
+}
+
+// Unattended: no answer available. Write the file, leave the host unset, do not block and
+// do not invent a hostname.
+func TestInitWithNothingToRead(t *testing.T) {
+	configHome(t)
+	for _, in := range []io.Reader{nil, strings.NewReader("")} {
+		configHome(t)
+		if _, err := InitConfig("", in, io.Discard); err != nil {
+			t.Fatalf("in = %v: %v", in, err)
+		}
+		if c, _ := Load(); c.Host != "" {
+			t.Errorf("in = %v: host = %q, want it left unset", in, c.Host)
+		}
+		if _, err := Resolve("", ""); err == nil {
+			t.Error("Resolve accepted an empty host")
+		}
+	}
+}
+
+// A file written by an older sand has to gain the keys added since, and keep its values.
+// This is the case the old "already exists, refusing" init had no answer for.
+func TestInitBringsAnOldFileUpToDate(t *testing.T) {
+	configHome(t)
+	if err := os.MkdirAll(filepath.Dir(ConfigPath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ConfigPath(), []byte("host: old-box\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := InitConfig("", nil, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	got := read(t, ConfigPath())
+	if !strings.Contains(got, "host: old-box") {
+		t.Errorf("lost the host that was there:\n%s", got)
+	}
+	for _, k := range ConfigKeys() {
+		if !strings.Contains(got, "# "+k+":") || !strings.Contains(got, "\n"+k+":") {
+			t.Errorf("no comment and key for %q in:\n%s", k, got)
+		}
+	}
+}
+
+// init must not freeze today's defaults into the file, for the same reason set must not:
+// the value would outlive the default it copied. TestSetDoesNotBakeInDefaults is the twin.
+func TestInitDoesNotBakeInDefaults(t *testing.T) {
+	configHome(t)
+	if _, err := InitConfig("box", nil, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	got := read(t, ConfigPath())
+	if strings.Contains(got, "remote_dir: "+defaultRemoteDir) {
+		t.Errorf("wrote the default remote_dir as a value:\n%s", got)
+	}
+	if !strings.Contains(got, "# Unset means "+defaultRemoteDir) {
+		t.Errorf("did not say what the default is:\n%s", got)
+	}
+	if c, _ := Load(); c.RemoteDir != defaultRemoteDir {
+		t.Errorf("remote_dir = %q, want Load to still default it", c.RemoteDir)
+	}
+}
+
+// The config comment naming the harnesses comes off the harnesses table, so adding one
+// cannot leave the file describing a set that no longer exists.
+func TestConfigDocNamesEveryHarness(t *testing.T) {
+	for _, name := range harnessNames() {
+		if !strings.Contains(configDoc["harness"], name) {
+			t.Errorf("harness comment does not mention %q: %s", name, configDoc["harness"])
+		}
 	}
 }
 
