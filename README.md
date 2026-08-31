@@ -79,6 +79,7 @@ Everything else defaults the PR to the one for the current branch. A number or a
 
     sand comments pull            # threads to the box, agent starts, output streams back
     sand comments pull --no-agent # just write the files
+    sand ci pull                  # the PR's failing checks and their logs, same trip
     sand up                       # sign, push, open a missing PR, verify, post replies
     sand push                     # alias for sand up
     sand up --dry-run             # all four steps, changes nothing anywhere
@@ -93,8 +94,9 @@ committer is not your git identity: your signature would be vouching for someone
 `--allow-other-authors` overrides that, and `--yes` deliberately does not.
 
 One agent per repo checkout on the box, enforced with `flock` there: a second `pull` for
-another PR of the same repo refuses to start one while the first is working, rather than let
-two agents edit one tree. `--no-agent` writes the files and leaves it alone.
+another PR of the same repo, or a `ci pull` for the same one, refuses to start an agent while
+the first is working, rather than let two edit one tree. `--no-agent` writes the files and
+leaves it alone.
 
 With no PR for the current `guy/<issue>-...` branch, `up` reads the box-authored
 `issue-<n>/pr-description.md` after signing and pushing, opens the PR, then verifies it. Missing
@@ -105,6 +107,17 @@ already posted stays `status: sent` and is not posted twice.
 
 The files land in `<remote_dir>/<owner>/<repo>/pr-<n>/` on the box: `index.md` plus one
 `c-<comment-id>.md` per thread. An agent on the box reads them through the installed skill.
+
+`sand ci pull` is the same trip for a red PR: what `gh pr checks` calls failed, plus the tail of
+each Actions run's failed steps, into `pr-<n>/ci/` as one file per check, then an agent on the
+box under the same lock. `--log-lines` (300) bounds the log and the file says how many lines were
+cut; a check that is not an Actions run (Buildkite and friends) gets its link and no log, because
+the Mac has no client for it.
+
+There is no `ci push`. A red check is answered by a commit, not a comment, so the fix leaves the
+box through `sand up` like everything else and CI running again is the verdict. The agent writes
+what it did under `## notes` in the check's file, which is for the next round to read, not for
+GitHub.
 
 ## Config
 
@@ -148,7 +161,8 @@ carries a signature. So `sand` fails closed wherever it cannot keep that true.
   diffstat before it asks.
 - One agent per checkout on the box, under `flock`.
 - Everything that writes anywhere but this Mac takes `--dry-run`: `comments pull`,
-  `comments push`, `sign`, `up`.
+  `comments push`, `ci pull`, `sign`, `up`.
+- `ci pull` only ever reads from GitHub. Nothing it produces is posted anywhere.
 
 ## Development
 

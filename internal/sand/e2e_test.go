@@ -25,6 +25,12 @@ case "$*" in
   *"repo view"*)  echo '{"nameWithOwner":"o/r"}' ;;
   *"issue view"*) echo '{"title":"Fix the thing, safely!","url":"https://github.com/o/r/issues/42","body":"The fd leaks."}' ;;
   *"/commits?"*)  cat "$GH_COMMITS" ;;
+  *"pr checks"*)
+    cat "$GH_CHECKS"
+    # gh exits non-zero when a check has failed, which is every run this command is for.
+    exit "${GH_CHECKS_EXIT:-1}"
+    ;;
+  *"run view"*)   cat "$GH_RUNLOG" ;;
   *"api user"*)   echo guy ;;
   *graphql*)      cat "$GH_FIXTURE" ;;
   *"pr create"*)
@@ -118,6 +124,8 @@ func harness(t *testing.T) (remoteBase, ghLog string) {
 	sshPath := write("ssh-shim", fakeSSH, 0o755)
 	fixturePath := write("fixture.json", fixture, 0o644)
 	commitsPath := write("commits.json", signedCommits, 0o644)
+	checksPath := write("checks.json", checksFixture, 0o644)
+	runLogPath := write("run.log", runLogFixture, 0o644)
 
 	ghLog = filepath.Join(dir, "gh.log")
 	remoteBase = filepath.Join(dir, "box")
@@ -127,6 +135,8 @@ func harness(t *testing.T) (remoteBase, ghLog string) {
 	t.Setenv("GH_LOG", ghLog)
 	t.Setenv("GH_FIXTURE", fixturePath)
 	t.Setenv("GH_COMMITS", commitsPath)
+	t.Setenv("GH_CHECKS", checksPath)
+	t.Setenv("GH_RUNLOG", runLogPath)
 	t.Setenv("GH_CREATED", filepath.Join(dir, "pr-created"))
 	t.Setenv("GH_PR_BODY", filepath.Join(dir, "pr-body"))
 	t.Setenv("HOME", dir) // keep any real ~/.config/sand out of it
@@ -136,12 +146,14 @@ func harness(t *testing.T) (remoteBase, ghLog string) {
 	flagPR = "42"
 	flagRemote = "origin"
 	flagDryRun, flagAll = false, false
+	flagLogLines = defaultLogLines
 	// Starting an agent is pull's job, not every test's: the ones about it opt in.
 	flagNoAgent, flagAgent, flagRepoDir = true, "", ""
 	betweenPosts = 0
 	t.Cleanup(func() {
 		flagHost, flagRemoteDir, flagPR, flagRemote = "", "", "", ""
 		flagNoAgent, flagAgent, flagRepoDir = false, "", ""
+		flagLogLines = 0
 		betweenPosts = 0
 	})
 	return remoteBase, ghLog

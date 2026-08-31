@@ -264,5 +264,20 @@ func agentPrompt(t Target, prDir string, threads int) string {
 		threads, t.Slug(), t.Number, t.Title, prDir)
 }
 
+// ciPrompt is agentPrompt for failing checks: the same shape, and short for the same reason.
+// It says not to push because that is the one instruction an agent given a red build will
+// otherwise act on, and the box has no key to push with.
+func ciPrompt(t Target, ciDir string, failing int) string {
+	return fmt.Sprintf(
+		"Use the sand skill. %d failing CI check(s) for %s#%d (%q) are pulled to %s on this "+
+			"box; you are in the repo checkout they are about. Work through every check whose "+
+			"status is pending: read its log, reproduce the failure here, fix it, run make "+
+			"check, commit, then write what you changed under `## notes` and the commit's short "+
+			"hash in `commit:` in that check's file, and set `status: fixed`. Do not run sand or "+
+			"gh, and do not push: the Mac signs and pushes, and CI runs again on what it pushed. "+
+			"Finish by listing which checks you fixed and which you left, with the reason.",
+		failing, t.Slug(), t.Number, t.Title, ciDir)
+}
+
 // checkoutDir is where the agent runs: the box keeps its checkouts in ~/projects/<repo>.
 func checkoutDir(t Target) string { return path.Join("~/projects", segment(t.Repo)) }

@@ -28,6 +28,12 @@ func (t Target) RemotePath(base string) string {
 	return path.Join(base, segment(t.Owner), segment(t.Repo), fmt.Sprintf("pr-%d", t.Number))
 }
 
+// CIPath is where a PR's failing checks live: a subdirectory of the PR's own directory, so
+// one place on the box holds everything about a PR. A sibling of it would have the two halves
+// of a review sharing a parent with `sendDir`, which adds and never deletes, and no way to
+// tell a thread file from a check file when clearing one out.
+func (t Target) CIPath(base string) string { return path.Join(t.RemotePath(base), "ci") }
+
 var unsafeSegment = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 
 // segment keeps repo and owner names to something that cannot mean anything to a shell.
