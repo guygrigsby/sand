@@ -84,6 +84,139 @@ func signOpts(out *strings.Builder, answer string) SignOpts {
 	return SignOpts{Remote: "origin", Base: "main", Yes: true, In: strings.NewReader(answer), Out: out}
 }
 
+// boxRepo stands in for the box's checkout, holding the branch at the commit the Mac has just
+// imported. Bare, because what the realignment has to get right is the ref; a real box also has
+// a working tree, and following it is receive.denyCurrentBranch=updateInstead's job rather than
+// anything this code does.
+func boxRepo(t *testing.T, dir, branch string) string {
+	t.Helper()
+	box := filepath.Join(t.TempDir(), "box.git")
+	mustRun(t, dir, "git", "init", "--quiet", "--bare", box)
+	mustRun(t, dir, "git", "push", "--quiet", box, branch)
+	return box
+}
+
+// Signing rewrites every commit it touches, so the box is left holding a chain that exists
+// nowhere else. Until this ran, the box then committed on top of it and the next round arrived
+// with unsigned copies of commits already signed and pushed: two lineages, same trees,
+// different hashes, and hours to untangle by hand.
+func TestSignPutsTheRewriteBackOnTheBox(t *testing.T) {
+	dir, remote := signRepo(t)
+	box := boxRepo(t, dir, "feature")
+	unsigned := mustRun(t, dir, "git", "rev-parse", "feature")
+
+	var out strings.Builder
+	o := signOpts(&out, "")
+	o.Push, o.Box = true, box
+	res, err := Sign(o)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+
+	signed := mustRun(t, dir, "git", "rev-parse", "feature")
+	if signed == unsigned {
+		t.Fatal("nothing was rewritten, so this proves nothing")
+	}
+	if got := mustRun(t, dir, "git", "--git-dir", box, "rev-parse", "feature"); got != signed {
+		t.Errorf("box is at %s, want the signed %s\n%s", short(got), short(signed), out.String())
+	}
+	if got := mustRun(t, dir, "git", "--git-dir", remote, "rev-parse", "feature"); got != signed {
+		t.Errorf("remote is at %s, want %s", short(got), short(signed))
+	}
+	if !res.BoxAligned {
+		t.Errorf("BoxAligned false after realigning it\n%s", out.String())
+	}
+
+	// And the second round is a no-op on both, rather than re-signing what the box now holds.
+	out.Reset()
+	res, err = Sign(o)
+	if err != nil {
+		t.Fatalf("second round: %v\n%s", err, out.String())
+	}
+	if res.Rewritten != 0 {
+		t.Errorf("second round rewrote %d commit(s)\n%s", res.Rewritten, out.String())
+	}
+}
+
+// The box is where the code is written. If it committed while signing ran, those commits are
+// only there, and a force push to realign would be the tool destroying the work it exists to
+// carry. It stops instead, and says how to put the new commits on top.
+func TestSignWillNotOverwriteABoxThatMovedOn(t *testing.T) {
+	dir, _ := signRepo(t)
+	box := boxRepo(t, dir, "feature")
+	imported := mustRun(t, dir, "git", "rev-parse", "feature")
+
+	// The agent answers one more thread on the box, after aif imported the branch here.
+	commit(t, dir, "c.txt", "c\n", "feature: c on the box while signing ran")
+	boxHead := mustRun(t, dir, "git", "rev-parse", "feature")
+	mustRun(t, dir, "git", "push", "--quiet", box, "feature")
+	mustRun(t, dir, "git", "reset", "--hard", "--quiet", imported)
+
+	var out strings.Builder
+	o := signOpts(&out, "")
+	o.Push, o.Box = true, box
+	res, err := Sign(o)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+
+	if got := mustRun(t, dir, "git", "--git-dir", box, "rev-parse", "feature"); got != boxHead {
+		t.Errorf("box moved from %s to %s, losing the commit only it had", short(boxHead), short(got))
+	}
+	if res.BoxAligned {
+		t.Error("reported the box as realigned when it was not")
+	}
+	for _, want := range []string{short(boxHead), "only on the box", "rebase"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output does not mention %q:\n%s", want, out.String())
+		}
+	}
+}
+
+// The tripwire for the runs that get past the realignment: a branch built on the lineage the
+// last round replaced. Signing it would push a second copy of work that is already on the
+// remote, so it stops before making a recovery branch, and names the pairs.
+func TestSignRefusesAPreSigningLineage(t *testing.T) {
+	dir, remote := signRepo(t)
+	var out strings.Builder
+	o := signOpts(&out, "")
+	o.Push = true
+	if _, err := Sign(o); err != nil {
+		t.Fatalf("first round: %v\n%s", err, out.String())
+	}
+	signed := mustRun(t, dir, "git", "rev-parse", "feature")
+
+	// The box never took the rewrite, so it is still on what it committed, and it commits again.
+	backup := mustRun(t, dir, "git", "branch", "--list", "--format=%(refname:short)", "feature-before-signing-*")
+	if backup == "" {
+		t.Fatal("no recovery branch to rewind to")
+	}
+	mustRun(t, dir, "git", "reset", "--hard", "--quiet", backup)
+	commit(t, dir, "d.txt", "d\n", "feature: d, on the stale lineage")
+	stale := mustRun(t, dir, "git", "rev-parse", "feature")
+
+	out.Reset()
+	_, err := Sign(o)
+	if err == nil {
+		t.Fatalf("signed a pre-signing lineage\n%s", out.String())
+	}
+	for _, want := range []string{"unsigned copies", "origin/feature", "feature: a"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not mention %q: %v", want, err)
+		}
+	}
+	if after := mustRun(t, dir, "git", "rev-parse", "feature"); after != stale {
+		t.Errorf("history moved anyway: %s → %s", short(stale), short(after))
+	}
+	if got := mustRun(t, dir, "git", "--git-dir", remote, "rev-parse", "feature"); got != signed {
+		t.Errorf("remote moved from %s to %s", short(signed), short(got))
+	}
+	// One recovery branch from the successful first round, and none from the refusal.
+	if got := mustRun(t, dir, "git", "branch", "--list", "feature-before-signing-*"); strings.Count(got, "\n") != 0 {
+		t.Errorf("refusal left a second recovery branch:\n%s", got)
+	}
+}
+
 func TestSignSignsEveryBranchCommitAndKeepsTheMerge(t *testing.T) {
 	dir, remote := signRepo(t)
 	before := mustRun(t, dir, "git", "log", "--format=%P %s", "feature", "--not", "origin/main")

@@ -53,16 +53,33 @@ ship:
 #
 # Fetched by URL rather than through a named remote, since BOX already names the box and a remote
 # is one more thing to keep pointing at the same place. --ff-only because a Mac-side branch that
-# has moved is signed history, and the answer to that is `git push <box> main:main`, not a
-# silently discarded rewrite. A dirty tree stops it too, which is the point.
+# has moved is signed history, and the answer to that is `sand sign`, which pushes it to the box,
+# not a silently discarded rewrite. A dirty tree stops it too, which is the point.
+#
+# A failed fast forward gets named rather than passed through: git's hint is written for a repo
+# where merging is an option, and here it never is. Two cases, and they want opposite answers, so
+# guessing between them is how the wrong one gets run.
 sync:
 	@box="$(BOX)"; \
 	case "x$$box" in x) echo "no box: pass BOX=<alias> or run \`sand config init\`"; exit 1;; \
 	  *[[:space:]]*) echo "BOX is not one host: $$box"; exit 1;; esac; \
 	branch=$$(git symbolic-ref --quiet --short HEAD) || \
 	  { echo "detached HEAD: switch to the branch you want from the box"; exit 1; }; \
-	set -x; git fetch "$$box:projects/sand" "$$branch"; \
-	git merge --ff-only FETCH_HEAD
+	git diff --quiet HEAD || \
+	  { echo "uncommitted changes here. The box is where code is edited, so this Mac has"; \
+	    echo "nothing to keep: commit them on the box, or \`git checkout .\` and re-sync."; exit 1; }; \
+	set -x; git fetch "$$box:projects/sand" "$$branch" || exit 1; \
+	{ set +x; } 2>/dev/null; \
+	if git merge --ff-only FETCH_HEAD; then :; \
+	elif git merge-base --is-ancestor HEAD FETCH_HEAD; then \
+	  echo "the history fast forwards, the checkout does not: git's error above is the one to"; \
+	  echo "read. Usually an untracked file here where the box has a committed one."; exit 1; \
+	else \
+	  echo "$$branch has moved on both machines, so no fast forward can say which is right."; \
+	  echo "The Mac must not merge, the box does: \`git pull\` there to settle it, then re-sync."; \
+	  echo "If this Mac's commits are only the signing, \`git reset --hard FETCH_HEAD\` drops"; \
+	  echo "them and \`sand sign\` re-does them."; exit 1; \
+	fi
 	$(MAKE) install
 
 clean:

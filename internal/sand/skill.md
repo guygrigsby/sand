@@ -11,12 +11,26 @@ replies leave the same way. `sand` itself runs on the Mac; never try to run `san
 Git goes one way around a ring, and this box owns two of its four steps:
 
     GitHub --pull--> this box --the Mac's `make sync`--> Mac --push--> GitHub
+                      ^                                  |
+                      +---- the Mac's `sand sign` --------+
 
 So: `git pull` and `git fetch` here, read only, that is the box's credential. Every merge happens
 here too, including bringing `main` into a branch that has fallen behind. Never `git push` from
 here, to GitHub or anywhere else: the Mac pulls from this box, and what leaves for GitHub has to
-be signed, which needs a key this box does not have. If a branch here is behind what the Mac
-signed and pushed, `git pull` is how it catches up, and the hashes will have changed.
+be signed, which needs a key this box does not have.
+
+**Your branch gets rewritten under you, and that is normal.** Signing cannot add a signature
+without re-creating the commit, so after the Mac runs `sand sign` every commit it signed has a new
+hash. It pushes that history straight back into this checkout, updating the working tree, so the
+branch you are on can change hash between one round and the next without you doing anything. Two
+things follow, and both are on you:
+
+- **Commit before you stop.** The Mac's push refuses to land while this tree is dirty, which
+  blocks the whole round. Uncommitted work at handoff is the one way to cause that.
+- **Never try to fix a hash mismatch by hand.** No rebase, no amend, no reset onto an older
+  commit, and no branch built on what the branch used to be. Copies of commits that are already
+  signed and on the remote are the failure this arrow exists to prevent, and the Mac refuses to
+  sign a branch carrying them. If the branch here looks behind or wrong, say so and stop.
 
 ## New issues
 
@@ -96,8 +110,8 @@ code moved under it, so check the current file before answering.
 ## Signatures, and the hash you record
 
 Commits made here are unsigned: this box has no keys and is not getting any. They are signed on
-the Mac, which re-creates the commit with a signature and so gives it a new hash. Do not try to
-sign or rewrite history here.
+the Mac, which re-creates the commit with a signature and so gives it a new hash, then pushes
+that history back into this checkout. Do not try to sign or rewrite history here.
 
 Commit as yourself, meaning this box's configured `user.name` and `user.email`. Never set
 `GIT_AUTHOR_*` or `GIT_COMMITTER_*`, never `--author`, and do not merge or cherry-pick anyone

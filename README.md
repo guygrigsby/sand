@@ -4,8 +4,10 @@ Helper CLI for the PR review loop between a Mac and a sandbox dev box. Internal 
 
 The box writes the code, merges, and can pull from GitHub but not push to it. The Mac has `gh`,
 the ssh keys and the signing key, never edits code and never merges: it fast forwards, signs and
-pushes. Git goes one way around the ring, `GitHub -> box -> Mac -> GitHub`. `sand` runs on the
-Mac and moves work between them:
+pushes. Git goes one way around the ring, `GitHub -> box -> Mac -> GitHub`, with one arrow back:
+signing re-creates commits, so `sand sign` pushes the signed branch to the box after GitHub has
+it, or the box would keep building on a chain that no longer exists. `sand` runs on the Mac and
+moves work between them:
 
 1. `sand comments pull` fetches the unresolved review threads for a PR, writes them to the
    box as markdown and starts an agent there to answer them.
@@ -27,8 +29,14 @@ On the Mac:
   post replies quoting them.
 - ssh to the box, by whatever alias you give `sand config init`
 
-On the box: a checkout of each repo under `~/projects/<repo>`, and an agent CLI (`claude` or
-`pi`) with the box-side skill installed, findable over ssh. `ssh box '<cmd>'` gets none of an
+On the box: a checkout of each repo under `~/projects/<repo>`, with
+
+    git config receive.denyCurrentBranch updateInstead
+
+set in it, so the Mac can hand the signed branch back after signing rewrote it. Git otherwise
+refuses a push into the checked-out branch; with this it updates the working tree too, and
+refuses while that tree is dirty, so it cannot land on top of uncommitted work. Also an agent
+CLI (`claude` or `pi`) with the box-side skill installed, findable over ssh. `ssh box '<cmd>'` gets none of an
 interactive shell's PATH, so a harness that only `.zshrc` puts on PATH is not there when `pull`
 looks for it; `~/.local/bin`, `~/bin` and `~/go/bin` are added for you, `~/.zshenv` covers the
 rest. `pull` says which binary it could not find rather than starting nothing quietly.
@@ -56,8 +64,8 @@ After that, in the Mac's copy, on the branch you want from the box:
 
 `make sync` takes no argument: it reads the box from `sand config get host`, the same host the
 tool itself uses, so `sand config set host <alias>` moves both. `BOX=<alias>` overrides. It
-fast forwards only, so it stops rather than discarding a branch the Mac has signed; push that
-back to the box instead.
+fast forwards only, so it stops rather than discarding a branch the Mac has signed; `sand sign`
+is what puts that branch on the box.
 
 Or push from the box, when the Mac accepts ssh: `make ship MAC=user@mac`. That is an rsync with
 `--delete` into `src/sand`, a build copy rather than a checkout.
@@ -92,6 +100,13 @@ Finer grained, if you want the steps apart:
 Signing shows the branch diffstat before it asks, and refuses any commit whose author or
 committer is not your git identity: your signature would be vouching for someone else's work.
 `--allow-other-authors` overrides that, and `--yes` deliberately does not.
+
+Signing then pushes the result to the box, after GitHub has taken it. It leases against the head
+it just read there, and stops rather than force pushing when the box has commits of its own since
+the import, printing the `git rebase --onto` that puts them on top. A branch that was built on a
+lineage an earlier signing round replaced is refused outright, before anything is rewritten: its
+commits are unsigned copies of commits already on the remote, and pushing a second copy is how
+the two histories drift apart unnoticed.
 
 One agent per repo checkout on the box, enforced with `flock` there: a second `pull` for
 another PR of the same repo, or a `ci pull` for the same one, refuses to start an agent while
@@ -159,6 +174,8 @@ carries a signature. So `sand` fails closed wherever it cannot keep that true.
   run re-marks instead of posting twice. If that check cannot be made, it posts nothing.
 - `sign` refuses commits whose author or committer is not your git identity, and shows you the
   diffstat before it asks.
+- `sign` will not force push onto the box over commits only the box has, and will not sign a
+  branch whose commits are unsigned copies of commits already on the remote.
 - One agent per checkout on the box, under `flock`.
 - Everything that writes anywhere but this Mac takes `--dry-run`: `comments pull`,
   `comments push`, `ci pull`, `sign`, `up`.

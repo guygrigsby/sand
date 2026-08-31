@@ -17,13 +17,38 @@
 Git flows one way around a ring, and every step is the only machine that can do its step:
 
     GitHub --pull--> box --make sync (fetch, --ff-only)--> Mac --push--> GitHub
+                      ^                                    |
+                      +------ sand sign, after the push ----+
 
 The box edits, pulls and merges. The Mac fast forwards, signs and pushes, and never pulls from
 GitHub and never merges: a merge or a pull there is a second place history can be decided, and
-then the two copies diverge in a way only a human can untangle. Signing is the one thing that
-moves history on the Mac, and it moves it forward only, so the box picks the result up on its
-next pull. The reason the Mac holds the GitHub push and the box does not is the signing key: what
-gets pushed has to be signed, and only the Mac can sign.
+then the two copies diverge in a way only a human can untangle. The reason the Mac holds the
+GitHub push and the box does not is the signing key: what gets pushed has to be signed, and only
+the Mac can sign.
+
+**Signing is not a forward move, and that is what the return arrow is for.** A signature is part
+of a commit's bytes, so adding one cannot amend history in place: `sand sign` re-creates every
+commit it touches with a new hash. The chain the box is sitting on stops existing at that moment.
+The box then commits on top of a dead lineage, and the next round arrives with unsigned copies of
+commits that are already signed and pushed: two chains, identical trees, different hashes,
+invisible in either machine's `git log` unless someone compares tree ids by hand. That happened,
+and it cost an afternoon.
+
+The fix is that the rewrite goes back where the code is written, in the same command that made
+it. `sand sign` pushes the signed branch to the box after the push to GitHub succeeds (see
+`alignBox`). The box does not pull it from GitHub, for one reason per repo and both of them
+permanent enough: this repo has no read-only credential on the box at all, and no secret is going
+on that box to give it one; aperture can pull from GitHub, but making the realignment depend on
+which repo it is means two code paths where one works. So the Mac pushes, always, and every repo
+behaves the same.
+
+The box needs one setting for that push to land, once per checkout:
+
+    git config receive.denyCurrentBranch updateInstead
+
+Without it git refuses a push into the branch that is checked out. With it, the push updates the
+working tree too, and it refuses when that tree is dirty, which is the behaviour worth having: it
+cannot land on top of work the box has not committed.
 
 The repo is [guygrigsby/sand](https://github.com/guygrigsby/sand), private, default branch
 `main`. The box needs a read-only credential for it to pull, and no more than that: no `gh`, no
@@ -92,7 +117,10 @@ box commits. Creating a ref is bookkeeping, not source editing.
 One command for everything the Mac owes a review round, in the only order that is safe, each
 step verified before the next runs and printed so a watching human can check it:
 
-1. `sign` the branch the PR comes from (whatever is not signed yet).
+1. `sign` the branch the PR comes from (whatever is not signed yet), which also puts the rewrite
+   back on the box once it is on the remote. A rewrite that reached GitHub and not the box gets
+   its own warning line: it is the one outcome here that breaks the *next* round rather than this
+   one, so it must not be left in the signing output for someone to notice.
 2. `push` `--force-with-lease`, then re-read the remote ref to prove it moved. Signing pushes
    what it rewrote itself, so this step only has work when there was nothing to sign: a branch
    signed in an earlier round, or by hand, that never reached the remote.
@@ -116,10 +144,30 @@ signing has to be finished and pushed and confirmed by GitHub before one reply g
 
 The box has no keys, so commits land unsigned and get signed on the Mac. `sand sign` imports the
 branch with `aif`, then re-creates the commits the branch adds over `<remote>/<base>` that are
-not signed already, with `git commit-tree -S` under `git filter-branch`, verifies the result and
-offers to push with `--force-with-lease`. Flags: `--remote` (origin), `--base` (main), `--yes`,
-`--push`, `--dry-run`, `--allow-other-authors`.
+not signed already, with `git commit-tree -S` under `git filter-branch`, verifies the result,
+offers to push with `--force-with-lease` and, once that push is on the remote, puts the same
+history on the box. Flags: `--remote` (origin), `--base` (main), `--yes`, `--push`, `--dry-run`,
+`--allow-other-authors`.
 
+- **The box gets the rewrite, from this command, right after the remote does.** Not a separate
+  step someone remembers, because the cost of forgetting is not visible until the round after
+  next (see the ring, above). `alignBox` runs only after the push to GitHub returned, so the box
+  is never moved to a history the remote rejected, and it never force pushes on faith:
+  `git ls-remote` reads the box's head first, the push leases against exactly that hash, and the
+  box's ref is only overwritten when it is either what `aif` imported (the rewrite is the sole
+  difference) or an ancestor of the signed head. Anything else means the box committed while
+  signing ran, those commits exist nowhere else, and a force push would destroy the work this
+  tool exists to carry: it stops, says so, and prints the `git fetch` + `git rebase --onto` that
+  puts them back on top. `SignResult.BoxAligned` carries the outcome, which is what lets `up`
+  say "GitHub has it, the box does not" in a line of its own instead of burying it.
+- **A branch built on the replaced lineage is refused, before anything is rewritten.**
+  `checkPreSigningLineage` keys every commit about to be signed by tree plus subject and looks
+  for the same key on `<remote>/<branch>`. A hit says this commit's signed twin is already
+  pushed, so signing would put a second copy of the same work on the remote. That is the state
+  the realignment exists to prevent, and this is the tripwire for the runs that got past it (a
+  box realigned by hand, a `--no-push` round, a branch someone rebased). It refuses by name and
+  pair, before the recovery branch is made and before any push, and points at the same
+  `rebase --onto`. Not a warning: the operator cannot see this from either machine's `git log`.
 - **Only what is unsigned, and what sits on top of it.** Review is a loop, so most runs meet a
   branch that is already partly signed, and re-signing a commit moves its hash, which kills
   every reply already posted quoting it. The already-signed commits go to filter-branch as
@@ -162,8 +210,13 @@ offers to push with `--force-with-lease`. Flags: `--remote` (origin), `--base` (
   next answer, which silently turned a "yes, push" into "not pushed" (`sign_test.go` covers it).
 - **Signing changes hashes.** A hash already quoted in a posted reply stops existing upstream, so
   sign before `comments push`, not after. `comments push` enforces that order (below).
+- **Tree plus subject is commit identity across a rewrite**, and there is one implementation of
+  it (`identity`, `identities`). Signing changes a commit's hash and nothing else about it, so
+  that pair is what survives. `push` already used it to re-point a reply's `commit:` at the
+  replacement; the lineage check asks the same question in the other direction, and two copies
+  of the key would eventually disagree about which one is right.
 - **`--dry-run` stops before the rewrite**, so no history moves, no recovery branch is made and
-  nothing is pushed. It still runs `aif` and `git fetch`: what would be signed is not knowable
+  nothing is pushed, to the remote or to the box. It still runs `aif` and `git fetch`: what would be signed is not knowable
   without the branch and the base.
 - `SAND_AIF` overrides the `aif` binary, which is how the tests import a branch without it.
 

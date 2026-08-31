@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -138,6 +139,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 		Base:              flagBase,
 		Yes:               flagYes,
 		AllowOtherAuthors: flagOtherAuth,
+		Box:               boxRepoURL(),
 		// sign pushes what it rewrote itself; step 2 covers the branch that needed no
 		// rewrite at all and was never pushed.
 		Push:   !flagDryRun,
@@ -154,6 +156,12 @@ func runUp(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Printf("  %s: %d commit(s), %d signed now, %d already signed and unmoved\n",
 		branch, res.Total, res.Rewritten, res.Kept)
+	// A rewrite that reached GitHub but not the box is the state that ends in two lineages,
+	// so it gets a line of its own rather than being left in the signing output above.
+	if res.Rewritten > 0 && res.Pushed && !res.BoxAligned {
+		warn("the box is still on the pre-signing branch; the reasons are above and the next round " +
+			"will refuse to sign until it is realigned")
+	}
 
 	fmt.Println("\n2/4 push")
 	if err := ensurePushed(branch); err != nil {
@@ -262,6 +270,7 @@ func signCmd() *cobra.Command {
 				In:                cmd.InOrStdin(),
 				Out:               cmd.OutOrStdout(),
 				AllowOtherAuthors: flagOtherAuth,
+				Box:               boxRepoURL(),
 			}
 			if len(args) > 0 {
 				o.Branch = args[0]
@@ -787,6 +796,26 @@ func setup(args []string) (Config, Target, error) {
 }
 
 func warn(msg string) { fmt.Fprintln(os.Stderr, "sand: warning:", msg) }
+
+// boxRepoURL is the box's checkout of this repo as a git URL, which is where signing has to put
+// the history it rewrote. The box keeps every repo at ~/projects/<repo> (checkoutDir), and a
+// push URL of host:projects/<repo> is relative to the login home, so it lands in the same place.
+//
+// The repo name comes from this checkout's directory rather than from `gh`: signing is the one
+// command in here that needs nothing from GitHub, and asking it for a name this machine already
+// knows would make a missing token break history rewriting. Empty when there is no configured
+// host or this is not a checkout, which alignBox reports rather than guessing at a box.
+func boxRepoURL() string {
+	cfg, err := Resolve(flagHost, flagRemoteDir)
+	if err != nil {
+		return ""
+	}
+	top, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		return ""
+	}
+	return cfg.Host + ":projects/" + segment(filepath.Base(strings.TrimSpace(string(top))))
+}
 
 // agentRun is the agent both pulls start: same box, same checkout, same lock, only the prompt
 // differs. One place, because the lock is the part that must not vary — two pulls that named
