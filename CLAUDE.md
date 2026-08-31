@@ -13,15 +13,30 @@
 
 Edit here, never on the Mac. There is no git remote, so source reaches the Mac by rsync:
 
-- On the Mac, in its copy: `make sync BOX=<sandbox-alias>` (rsyncs from here, then installs).
-- From here, if the Mac accepts ssh: `make ship MAC=user@mac`.
+- On the Mac, in its copy: `make sync` (rsyncs from here, then installs). No argument needed:
+  `BOX` comes from `sand config get host`, i.e. the same host the tool itself uses, so
+  `sand config set host <alias>` moves both. `BOX=<alias>` and `SAND_HOST` still override.
+- From here, if the Mac accepts ssh: `make ship MAC=user@mac`. No default: the Mac's address
+  is not in sand's config and guessing it would point an rsync `--delete` at whatever answered.
 
 Both use `--delete`, so a stray edit on the Mac is overwritten rather than left to diverge.
+
+The `BOX` lookup runs `$(GO) run . config get host` from the checkout, not an installed `sand`:
+`make sync` is what installs the new binary, so the installed one is by definition the old one,
+and an older one with no `config get` answers with the whole config file. The recipe refuses a
+`BOX` that is empty or more than one word rather than handing that to rsync. It is expanded
+inside the `sync` recipe only, so `make build` and `make check` never pay for the compile.
+
+If the tailnet refuses the Mac's local username (`tailnet policy does not permit you to SSH as
+user "guygrigsby"`), the login user belongs in the Mac's `~/.ssh/config`, or in the config as
+`sand config set host ubuntu@guy-llm-sandbox`. Not in the source: the default there is the bare
+alias, and a machine-specific login is not a thing to hardcode for every machine.
 
 ## Commands
 
 `sand` is where the Mac-side scripts for this workflow are being consolidated, so each one is a
-subcommand rather than a shell file: `comments` (below), `sign`, `skill`, `config` (`init`, `set`).
+subcommand rather than a shell file: `comments` (below), `sign`, `skill`, `config` (`init`,
+`get`, `set`).
 
 ## Signing: `sand sign [branch]`
 
@@ -60,7 +75,9 @@ PR defaults to the one for the Mac's current branch; a number or a PR URL overri
 Defaults are `guy-llm-sandbox` and `~/.sand`, so no config is needed to use it. Override in
 `~/.config/sand/config.yaml` (`host`, `remote_dir`), or with `--host` / `--remote-dir`, or
 `SAND_HOST` / `SAND_REMOTE_DIR`, in that order of precedence. `sand config` prints the file,
-`sand config init` writes a starter one, `sand config set <key> <value>...` sets any key.
+`sand config init` writes a starter one, `sand config set <key> <value>...` sets any key, and
+`sand config get <key>` prints one effective value and nothing else, for scripts and the
+Makefile (`get` applies env and the defaults; `config` only shows what the file says).
 
 `set` renders the whole file from the struct: the keys, their order and the settable list all
 come from `Config`'s yaml tags (`configFields`), with the per-key comments in `configDoc`, so a

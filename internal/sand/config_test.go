@@ -83,6 +83,29 @@ func TestSetDoesNotBakeInDefaults(t *testing.T) {
 	}
 }
 
+// Get is what the Makefile reads to find the box, so it has to answer with no config file
+// at all, honour the file when there is one, and let env win over it.
+func TestGetEffectiveValue(t *testing.T) {
+	configHome(t)
+
+	if v, err := Get("host"); err != nil || v != defaultHost {
+		t.Fatalf("with no config file: %q, %v; want the default", v, err)
+	}
+	if _, err := Set([][2]string{{"host", "ubuntu@box"}}); err != nil {
+		t.Fatal(err)
+	}
+	if v, err := Get("host"); err != nil || v != "ubuntu@box" {
+		t.Fatalf("with a config file: %q, %v", v, err)
+	}
+	t.Setenv("SAND_HOST", "env-box")
+	if v, err := Get("host"); err != nil || v != "env-box" {
+		t.Fatalf("with SAND_HOST set: %q, %v", v, err)
+	}
+	if _, err := Get("hots"); err == nil {
+		t.Error("an unknown key came back without an error")
+	}
+}
+
 func TestSetRejectsUnknownKey(t *testing.T) {
 	configHome(t)
 	_, err := Set([][2]string{{"hots", "box"}})

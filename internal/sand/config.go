@@ -18,7 +18,9 @@ type Config struct {
 
 const (
 	// There is exactly one sandbox, and this is the alias the Mac reaches it by, so it
-	// is a default rather than something to configure before the tool works at all.
+	// is a default rather than something to configure before the tool works at all. The
+	// login user is the Mac's ssh config to decide, not this program's; a Mac whose tailnet
+	// refuses its local username sets it there or with `sand config set host <user>@<box>`.
 	defaultHost      = "guy-llm-sandbox"
 	defaultRemoteDir = "~/.sand"
 )
@@ -126,6 +128,21 @@ func ConfigKeys() []string {
 		keys = append(keys, f.Key)
 	}
 	return keys
+}
+
+// Get returns the effective value of one key: the file, with env and the defaults applied,
+// which is what another program (the Makefile) needs to reach the same box this tool would.
+func Get(key string) (string, error) {
+	c, err := Resolve("", "")
+	if err != nil {
+		return "", err
+	}
+	for _, f := range configFields(&c) {
+		if f.Key == key {
+			return *f.ptr, nil
+		}
+	}
+	return "", fmt.Errorf("unknown config key %q; known keys: %s", key, strings.Join(ConfigKeys(), ", "))
 }
 
 // Set writes key/value pairs to the config file, creating it if it does not exist and

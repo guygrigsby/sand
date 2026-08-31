@@ -201,6 +201,22 @@ func configCmd() *cobra.Command {
 			return nil
 		},
 	}
+	get := &cobra.Command{
+		Use:   "get <key>",
+		Short: "Print one effective config value",
+		Long: "Prints the value this tool would use for a key — the file, with env and the\n" +
+			"built-in defaults applied — and nothing else, so a script can read it. Keys: " +
+			strings.Join(ConfigKeys(), ", ") + ".",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			v, err := Get(args[0])
+			if err != nil {
+				return err
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), v)
+			return nil
+		},
+	}
 	set := &cobra.Command{
 		Use:   "set <key> <value> [<key> <value>...]",
 		Short: "Set config values, creating the file if needed",
@@ -229,7 +245,7 @@ func configCmd() *cobra.Command {
 			return nil
 		},
 	}
-	c.AddCommand(init, set)
+	c.AddCommand(init, get, set)
 	return c
 }
 
