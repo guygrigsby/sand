@@ -202,6 +202,11 @@ history on the box. Flags: `--remote` (origin), `--base` (main), `--yes`, `--pus
 
 - **filter-branch, not rebase.** It replays the original trees with rewritten parents, so merge
   commits survive and no content conflict is possible. A rebase would flatten or stall.
+- **A branch argument is checked before `aif` sees it.** `aif` takes the branch as its only
+  argument, so a word that is not a branch is a word aif is free to read as one of its own
+  subcommands: `sand sign push`, a slip for `--push`, pushed the Mac's HEAD to the box and only
+  then failed on `git switch push`. The name has to resolve locally, on `<remote>`, or on the
+  box, and an unreachable box does not count as evidence against it.
 - **Refusals come before the rewrite:** protected branch (`main`, `master`, `develop`, `trunk`,
   `release/*`), a rebase/merge/cherry-pick in progress, a dirty tree, a missing `aif`, a missing
   base ref, no common history. A missing `aif` is a stop, never a fallback to another sync route.

@@ -84,6 +84,30 @@ func signOpts(out *strings.Builder, answer string) SignOpts {
 	return SignOpts{Remote: "origin", Base: "main", Yes: true, In: strings.NewReader(answer), Out: out}
 }
 
+// `sand sign push`, a slip for `sand sign --push`, reached aif as the branch name and aif read
+// it as its own push subcommand: this machine's HEAD went to the box before git ever said
+// "invalid reference: push". A name nothing can resolve does not get handed over.
+func TestSignRefusesABranchNothingHas(t *testing.T) {
+	dir, _ := signRepo(t)
+	ran := filepath.Join(dir, "aif-ran")
+	aif := filepath.Join(t.TempDir(), "aif")
+	if err := os.WriteFile(aif, []byte("#!/bin/sh\ntouch "+ran+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SAND_AIF", aif)
+
+	var out strings.Builder
+	o := signOpts(&out, "")
+	o.Branch = "push"
+	_, err := Sign(o)
+	if err == nil || !strings.Contains(err.Error(), "no branch push") {
+		t.Fatalf("want a refusal naming the branch, got %v\n%s", err, out.String())
+	}
+	if _, statErr := os.Stat(ran); statErr == nil {
+		t.Error("aif was run with a name that is not a branch")
+	}
+}
+
 // boxRepo stands in for the box's checkout, holding the branch at the commit the Mac has just
 // imported. Bare, because what the realignment has to get right is the ref; a real box also has
 // a working tree, and following it is receive.denyCurrentBranch=updateInstead's job rather than

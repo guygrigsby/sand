@@ -116,6 +116,15 @@ func Sign(o SignOpts) (SignResult, error) {
 
 	base := o.Remote + "/" + o.Base
 	res.Branch, res.Base = branch, base
+
+	// aif takes the branch as its only argument, so a word that is not a branch is a word aif
+	// is free to read as one of its own subcommands: `sand sign push` pushed this machine's
+	// HEAD to the box and then failed on `git switch push`. The name has to be a branch
+	// something can see before it is handed over. Not the current branch, which exists by
+	// definition, and not a branch that is only on the box when there is no box to ask.
+	if o.Branch != "" && !g.refExists("refs/heads/"+branch) && !g.refExists(o.Remote+"/"+branch) && !onBox(g, o, branch) {
+		return res, fmt.Errorf("no branch %s: not here, not on %s, not on the box", branch, o.Remote)
+	}
 	if err := g.stream(exec.Command(aifBin(), branch)); err != nil {
 		return res, fmt.Errorf("%s %s: %w", aifBin(), branch, err)
 	}
@@ -296,6 +305,17 @@ func Sign(o SignOpts) (SignResult, error) {
 	res.Pushed = true
 	res.BoxAligned = alignBox(g, o, branch, imported, head)
 	return res, nil
+}
+
+// onBox answers whether the box has this branch, and false when there is no box configured or
+// it cannot be reached: the caller is deciding whether to hand a name to aif, and an unreachable
+// box is not evidence that the name is wrong.
+func onBox(g gitCmd, o SignOpts, branch string) bool {
+	if o.Box == "" {
+		return false
+	}
+	refs, err := g.capture("ls-remote", o.Box, "refs/heads/"+branch)
+	return err == nil && strings.TrimSpace(refs) != ""
 }
 
 // alignBox puts the box's branch on the history this run just signed.
