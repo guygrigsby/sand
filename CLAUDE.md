@@ -370,6 +370,15 @@ silent on failure, so the remote line uses exit codes (111 taken, 112 no checkou
 
 PR defaults to the one for the Mac's current branch; a number or a PR URL overrides.
 
+**Which PR the current branch has is asked by repo and head, never guessed from the remotes.**
+`gh pr view` with no argument works the head repo out of the local remotes, and the box is one of
+them: in aperture it read `guy-llm-sandbox:projects/aperture` as owner `projects`, looked for a
+head of `projects:<branch>`, and reported no open PR for a branch whose PR was open. `sand
+comments pull`, `ci pull` and `comments push` all entered through that, while `status` and `up`
+were fine, because they went through `currentBranchPR`, which passes `--repo` and `--head`.
+`ResolveTarget` now calls the same function: one implementation, and nothing about the ring's own
+remotes can change the answer.
+
 `host` is the one setting with no default and the one thing a new Mac has to be told: it names
 one machine on one tailnet, so a compiled-in alias is either someone else's box or a name that
 resolves nowhere. `remote_dir` defaults to `~/.sand`, `harness` to `claude` and `model` to

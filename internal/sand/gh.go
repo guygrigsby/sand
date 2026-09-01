@@ -61,12 +61,11 @@ func ResolveTarget(arg string) (Target, error) {
 		return Target{Owner: m[1], Repo: strings.TrimSuffix(m[2], ".git"), Number: n}, nil
 	}
 
-	t, err := currentRepo()
-	if err != nil {
-		return Target{}, err
-	}
-
 	if arg != "" {
+		t, err := currentRepo()
+		if err != nil {
+			return Target{}, err
+		}
 		n, err := strconv.Atoi(arg)
 		if err != nil {
 			return Target{}, fmt.Errorf("PR must be a number or a github.com pull URL, got %q", arg)
@@ -75,17 +74,20 @@ func ResolveTarget(arg string) (Target, error) {
 		return t, nil
 	}
 
-	// No PR given: the branch checked out here is the answer. gh matches it against
-	// the open PRs' head branches.
-	var pr struct {
-		Number      int    `json:"number"`
-		HeadRefName string `json:"headRefName"`
+	// No PR given: the branch checked out here is the answer, asked the way status and up ask
+	// it. This used to be a bare `gh pr view`, which guesses the head repo from the local
+	// remotes and reads the box's (guy-llm-sandbox:projects/aperture) as owner "projects": it
+	// looked for a head of `projects:<branch>`, found nothing, and said there was no open PR
+	// for a branch whose PR was open. Naming the repo and the head leaves nothing to guess,
+	// and there is one implementation of "which PR is this branch's" rather than two that
+	// disagree about it.
+	t, found, err := currentBranchPR()
+	if err != nil {
+		return Target{}, fmt.Errorf("looking for the PR for branch %q: %w", currentBranch(), err)
 	}
-	if err := ghJSON(&pr, "pr", "view", "--json", "number,headRefName"); err != nil {
-		return Target{}, fmt.Errorf("no open PR for branch %q in %s; pass a number or URL (%w)",
-			currentBranch(), t.Slug(), err)
+	if !found {
+		return Target{}, fmt.Errorf("no open PR for branch %q in %s; pass a number or URL", t.Branch, t.Slug())
 	}
-	t.Number, t.Branch = pr.Number, pr.HeadRefName
 	return t, nil
 }
 

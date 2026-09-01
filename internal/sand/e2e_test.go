@@ -46,6 +46,15 @@ case "$*" in
     else echo '[{"number":42,"url":"https://github.com/o/r/pull/42","title":"Fix the thing","headRefName":"topic"}]'; fi
     ;;
   *"pr view"*)
+    # A bare "pr view" guesses the head repo from the local remotes, and in aperture the box
+    # remote (guy-llm-sandbox:projects/aperture) reads as owner "projects". Naming the PR or the
+    # repo leaves nothing to guess, so only the bare form fails here.
+    if [ "$GH_BAD_HEAD_GUESS" = 1 ]; then
+      case "$*" in
+        *--repo*) ;;
+        *) echo 'no pull requests found for branch "projects:topic"' >&2; exit 1 ;;
+      esac
+    fi
     if [ "$GH_PR_MISSING" = 1 ] && [ ! -e "$GH_CREATED" ]; then
       echo 'no pull requests found' >&2
       exit 1
@@ -493,8 +502,11 @@ func TestPullDetectsPRFromBranch(t *testing.T) {
 	if err := runPull(nil); err != nil {
 		t.Fatalf("pull: %v", err)
 	}
-	if !strings.Contains(read(t, ghLog), "number,headRefName") {
-		t.Errorf("did not ask gh for the current branch's PR:\n%s", read(t, ghLog))
+	// Named repo, named head: the question with no local remote in it. The log is one
+	// argument per line, hence the two.
+	log := read(t, ghLog)
+	if !strings.Contains(log, "\n--head\n") || !strings.Contains(log, "number,title,url,headRefName") {
+		t.Errorf("did not ask gh for the current branch's PR by repo and head:\n%s", log)
 	}
 	if _, err := os.Stat(filepath.Join(remoteBase, "o", "r", "pr-42", "c-2043881.md")); err != nil {
 		t.Errorf("nothing landed for the detected PR: %v", err)
