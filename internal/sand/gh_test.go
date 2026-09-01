@@ -82,6 +82,25 @@ func TestResolveTargetFromURL(t *testing.T) {
 	}
 }
 
+// A bare `gh pr view` works out the head repo from the local remotes, and the box is a remote:
+// in aperture it read guy-llm-sandbox:projects/aperture as owner "projects", looked for a head of
+// `projects:guy/1532-instance-dormancy`, and said there was no open PR for a branch whose PR was
+// open. Every command that takes the PR from the current branch came through here, while status
+// and up were fine, because they name the repo and the head and leave nothing to guess.
+func TestResolveTargetIgnoresTheBoxRemoteWhenFindingThePR(t *testing.T) {
+	signRepo(t)
+	harness(t)
+	t.Setenv("GH_BAD_HEAD_GUESS", "1")
+
+	got, err := ResolveTarget("")
+	if err != nil {
+		t.Fatalf("no PR found for the branch checked out here: %v", err)
+	}
+	if got.Number != 42 || got.Slug() != "o/r" {
+		t.Errorf("%+v", got)
+	}
+}
+
 type errString string
 
 func (e errString) Error() string { return string(e) }

@@ -123,32 +123,61 @@ func fence(s string) string {
 // the drafted reply. Comments and DiffHunk are not recovered — pull regenerates those
 // from GitHub, so re-reading them would only be a chance to disagree with upstream.
 func Parse(s string) (Thread, error) {
-	m := frontMatter.FindStringSubmatch(s)
-	if m == nil {
-		return Thread{}, fmt.Errorf("no YAML front matter (file must start with ---)")
+	fm, body, err := splitFrontMatter(s)
+	if err != nil {
+		return Thread{}, err
 	}
 
 	var t Thread
-	if err := yaml.Unmarshal([]byte(m[1]), &t.Meta); err != nil {
+	if err := yaml.Unmarshal([]byte(fm), &t.Meta); err != nil {
 		return Thread{}, fmt.Errorf("front matter: %w", err)
 	}
 	if t.Meta.CommentID == 0 {
 		return Thread{}, fmt.Errorf("front matter has no comment_id")
 	}
-
-	// Everything after the first reply heading is the reply, so a reply that quotes the
-	// heading keeps its own text. Nothing above the slot can produce a bare "## reply"
-	// line to match first: comment bodies are blockquoted, diff lines are prefixed.
-	body := s[len(m[0]):]
-	if i := strings.Index(body, "\n"+replyHeading); i >= 0 {
-		body = body[i+len("\n"+replyHeading):]
-	} else if strings.HasPrefix(body, replyHeading) {
-		body = body[len(replyHeading):]
-	} else {
-		return t, nil // no reply slot at all: nothing drafted
-	}
-	t.Reply = strings.TrimSpace(hintComment.ReplaceAllString(body, ""))
+	t.Reply = sectionAfter(body, replyHeading)
 	return t, nil
+}
+
+// splitFrontMatter separates the YAML block from the rest of the file.
+func splitFrontMatter(s string) (fm, body string, err error) {
+	m := frontMatter.FindStringSubmatch(s)
+	if m == nil {
+		return "", "", fmt.Errorf("no YAML front matter (file must start with ---)")
+	}
+	return m[1], s[len(m[0]):], nil
+}
+
+// sectionAfter is the agent's slot in a file: everything after the first line that is exactly
+// heading, with hint comments stripped. Empty when the heading is not there at all, which is a
+// file with nothing drafted rather than a broken one.
+//
+// Everything after the first heading, so a draft that quotes the heading keeps its own text.
+// Nothing pull writes above a slot can produce a bare "## reply" or "## notes" line to match
+// first: comment bodies are blockquoted, diff and log lines live inside a fence.
+func sectionAfter(body, heading string) string {
+	return section(body, heading, strings.Index(body, "\n"+heading))
+}
+
+// lastSectionAfter is sectionAfter counting from the end, for a slot sitting under content this
+// tool does not escape. A CI log is verbatim: a build that prints "## notes" at the start of a
+// line would otherwise take the slot, and everything after it in the log would read as the
+// agent's notes. The cost is that notes quoting their own heading lose what is above it, which
+// is the rarer of the two.
+func lastSectionAfter(body, heading string) string {
+	return section(body, heading, strings.LastIndex(body, "\n"+heading))
+}
+
+func section(body, heading string, i int) string {
+	switch {
+	case i >= 0:
+		body = body[i+len("\n"+heading):]
+	case strings.HasPrefix(body, heading):
+		body = body[len(heading):]
+	default:
+		return ""
+	}
+	return strings.TrimSpace(hintComment.ReplaceAllString(body, ""))
 }
 
 // ReplaceFrontMatter rewrites only the YAML block of an existing file, leaving the body

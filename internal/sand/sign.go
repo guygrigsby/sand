@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -26,6 +27,17 @@ func aifBin() string {
 		return v
 	}
 	return "aif"
+}
+
+// aifHint is where to get aif, for the one refusal a new person cannot clear by reading it: aif
+// ships in the corp repo rather than this one, and a stop with no way out is what sends somebody
+// looking for another route to move the branch. Empty for an overridden SAND_AIF, since that
+// binary is theirs and ours is not the answer.
+func aifHint(bin string) string {
+	if bin != "aif" {
+		return ""
+	}
+	return ": install it from the corp repo with `./tool/go install ./misc/aif`"
 }
 
 // protectedBranches never get rewritten, whatever the caller says.
@@ -45,6 +57,16 @@ type SignOpts struct {
 	In     io.Reader
 	Out    io.Writer
 
+	// Box is the box's checkout of this repo as a git URL (host:projects/<repo>). The
+	// rewrite is put back there once it is on the remote: see alignBox. Empty skips that,
+	// which is a machine with no box configured, not a normal run.
+	Box string
+
+	// BoxHost and BoxDir address that same checkout over ssh rather than as a push URL,
+	// because checkBoxCanReceive has to ask it questions and a push URL cannot carry one.
+	// Empty skips the pre-flight.
+	BoxHost, BoxDir string
+
 	// AllowOtherAuthors signs commits whose author or committer is not this machine's git
 	// identity. Off by default: see checkSigningIdentity.
 	AllowOtherAuthors bool
@@ -61,6 +83,11 @@ type SignResult struct {
 	Kept      int    // of those, the ones already signed, whose hashes did not move
 	Pushed    bool
 	Cancelled bool // the operator declined the rewrite, so nothing happened
+
+	// BoxAligned is whether the box now holds the history this run signed. False with
+	// Pushed true is the state that used to go unnoticed and is worth reporting: GitHub has
+	// the signed branch and the box is still on the lineage it stopped existing on.
+	BoxAligned bool
 }
 
 // Sign imports the branch, signs the commits it adds over the base that are not signed
@@ -99,13 +126,25 @@ func Sign(o SignOpts) (SignResult, error) {
 	}
 
 	// A missing aif is not a reason to reach for some other way of moving the branch: the
-	// wrong branch signed with the right key is worse than a clear stop.
+	// wrong branch signed with the right key is worse than a clear stop. It is also the one
+	// requirement a new person cannot satisfy by reading the error, since aif ships in the corp
+	// repo and not here, so the stop carries the install line. Only for the real aif: an
+	// overridden SAND_AIF is somebody's own binary and telling them to install ours is noise.
 	if _, err := exec.LookPath(aifBin()); err != nil {
-		return res, fmt.Errorf("%s is required to import the branch and is not on PATH", aifBin())
+		return res, fmt.Errorf("%s is required to import the branch and is not on PATH%s", aifBin(), aifHint(aifBin()))
 	}
 
 	base := o.Remote + "/" + o.Base
 	res.Branch, res.Base = branch, base
+
+	// aif takes the branch as its only argument, so a word that is not a branch is a word aif
+	// is free to read as one of its own subcommands: `sand sign push` pushed this machine's
+	// HEAD to the box and then failed on `git switch push`. The name has to be a branch
+	// something can see before it is handed over. Not the current branch, which exists by
+	// definition, and not a branch that is only on the box when there is no box to ask.
+	if o.Branch != "" && !g.refExists("refs/heads/"+branch) && !g.refExists(o.Remote+"/"+branch) && !onBox(g, o, branch) {
+		return res, fmt.Errorf("no branch %s: not here, not on %s, not on the box", branch, o.Remote)
+	}
 	if err := g.stream(exec.Command(aifBin(), branch)); err != nil {
 		return res, fmt.Errorf("%s %s: %w", aifBin(), branch, err)
 	}
@@ -127,6 +166,7 @@ func Sign(o SignOpts) (SignResult, error) {
 		return res, err
 	}
 	res.Head = head
+	imported := head // what the box had when this run started, for alignBox
 	commits, err := g.branchCommits(head, base)
 	if err != nil {
 		return res, err
@@ -149,7 +189,7 @@ func Sign(o SignOpts) (SignResult, error) {
 	fmt.Fprintf(o.Out, "Comparison base: %s (%s)\n", base, baseShort)
 	if len(dirty) == 0 {
 		fmt.Fprintf(o.Out, "All %d commit(s) unique to %s are signed already; nothing to sign.\n", count, branch)
-		return res, nil
+		return res, publish(g, o, answers, &res, branch, imported, head)
 	}
 	fmt.Fprintf(o.Out, "About to sign %d of %d commit(s) unique to %s\n", len(dirty), count, branch)
 	if len(clean) > 0 {
@@ -174,6 +214,14 @@ func Sign(o SignOpts) (SignResult, error) {
 		if err := checkSigningIdentity(g, commits, dirty); err != nil {
 			return res, err
 		}
+	}
+	// Before the lineage check, not after it: the recovery that check prints ends in a push to
+	// the box, so a box that cannot receive one makes that advice useless too.
+	if err := checkBoxCanReceive(o); err != nil {
+		return res, err
+	}
+	if err := checkPreSigningLineage(g, dirty, o.Remote, o.Base, branch, head, o.Box); err != nil {
+		return res, err
 	}
 	if o.DryRun {
 		fmt.Fprintf(o.Out, "\ndry run: history not rewritten, nothing pushed to %s\n", o.Remote)
@@ -264,19 +312,377 @@ func Sign(o SignOpts) (SignResult, error) {
 	}
 	fmt.Fprintf(o.Out, "\nRecovery branch retained as: %s\n", backup)
 
+	return res, publish(g, o, answers, &res, branch, imported, head)
+}
+
+// publish is the tail of a run: offer the push to the remote, and once it lands, put the same
+// history on the box.
+//
+// Both endings reach it, the rewrite and the no-op, and that is the point. A branch can arrive
+// here with every commit signed and the remote still behind it: `git rebase` on a Mac with
+// commit.gpgsign signs what it replays, so the recovery from a duplicated lineage produces
+// signed commits before signing ever sees them. Returning at "nothing to sign" left the remote
+// five commits behind with `--push` on the command line, and the operator pushed by hand, which
+// is the one step in this loop that has to be a signed push from this machine.
+//
+// Nothing is pushed when the remote already holds this head, and nothing is pushed when the
+// remote holds commits this branch does not: a lease would let that rewind, and a remote ahead
+// of a fully-signed branch means something happened that this run cannot account for.
+func publish(g gitCmd, o SignOpts, answers *bufio.Reader, res *SignResult, branch, imported, head string) error {
+	ref := o.Remote + "/" + branch
+	if g.refExists(ref) {
+		switch remoteHead, err := g.capture("rev-parse", ref); {
+		case err != nil:
+			return err
+		case remoteHead == head:
+			// Still realigned, and the invariant holds: the box is only moved to a history the
+			// remote has, and here the remote has it already.
+			fmt.Fprintf(o.Out, "%s is already at %s; nothing to push.\n", ref, short(head))
+			res.BoxAligned = alignBox(g, o, branch, imported, head)
+			return nil
+		case exec.Command("git", "merge-base", "--is-ancestor", remoteHead, head).Run() != nil:
+			fmt.Fprintf(o.Out, "\n%s is at %s, which is not an ancestor of %s: it holds commit(s) this\n"+
+				"branch does not, so nothing was pushed. What they are:\n  git log --oneline %s --not %s\n",
+				ref, short(remoteHead), short(head), ref, branch)
+			return nil
+		}
+	}
+
 	push := o.Push
 	if !push {
 		push = confirm(answers, o.Out, fmt.Sprintf("Push %s to %s with --force-with-lease?", branch, o.Remote))
 	}
 	if !push {
 		fmt.Fprintf(o.Out, "Not pushed. When ready:\n  git push --force-with-lease %s %s\n", o.Remote, branch)
-		return res, nil
+		if o.Box != "" {
+			fmt.Fprintf(o.Out, "  git push --no-verify --force-with-lease %s %s   # and the box, or it keeps building on %s\n",
+				o.Box, branch, short(imported))
+		}
+		return nil
 	}
 	if err := g.run("push", "--force-with-lease", o.Remote, branch); err != nil {
-		return res, err
+		return err
 	}
 	res.Pushed = true
-	return res, nil
+	res.BoxAligned = alignBox(g, o, branch, imported, head)
+	return nil
+}
+
+// onBox answers whether the box has this branch, and false when there is no box configured or
+// it cannot be reached: the caller is deciding whether to hand a name to aif, and an unreachable
+// box is not evidence that the name is wrong.
+func onBox(g gitCmd, o SignOpts, branch string) bool {
+	if o.Box == "" {
+		return false
+	}
+	refs, err := g.capture("ls-remote", o.Box, "refs/heads/"+branch)
+	return err == nil && strings.TrimSpace(refs) != ""
+}
+
+// alignBox puts the box's branch on the history this run just signed.
+//
+// The rewrite is the only thing that moves history on the Mac, and it changes every hash it
+// touches, so a box left on the pre-signing lineage is on a chain that no longer exists
+// anywhere else. It keeps committing there, and the next round arrives with unsigned copies of
+// commits that are already signed and pushed: two chains, same trees, different hashes, and
+// nothing in either machine's `git log` says so. That is not a state to detect and recover
+// from, it is a state not to enter, so the realignment is part of signing rather than a step
+// someone has to remember. checkPreSigningLineage is only the tripwire for the paths that skip
+// it (a declined push, a box whose tree was dirty).
+//
+// The box is where the code is written, so nothing here force-pushes on faith. The box's branch
+// has to be exactly what this run imported, or already an ancestor of the result; anything else
+// means the box committed while signing ran and those commits exist nowhere else. The push
+// leases against the hash that was just read, so a box that moves in between is a rejection
+// rather than a loss.
+func alignBox(g gitCmd, o SignOpts, branch, imported, head string) bool {
+	if o.Box == "" {
+		fmt.Fprintf(o.Out, "\nNo box configured, so %s there still points at %s: `sand config set host <alias>`.\n",
+			branch, short(imported))
+		return false
+	}
+
+	fmt.Fprintf(o.Out, "\nRealigning the box, which is still on the pre-signing %s:\n", short(imported))
+	refs, err := g.capture("ls-remote", o.Box, "refs/heads/"+branch)
+	if err != nil {
+		fmt.Fprintf(o.Out, "  could not read %s: %v\n", o.Box, err)
+		fmt.Fprintf(o.Out, "  %s has the signed branch; the box does not. Re-run when it answers.\n", o.Remote)
+		return false
+	}
+	boxHead, _, _ := strings.Cut(strings.TrimSpace(refs), "\t")
+
+	lease := []string{"--force-with-lease=refs/heads/" + branch + ":" + boxHead}
+	switch {
+	case boxHead == "":
+		lease = nil // not there yet, so there is nothing to overwrite and nothing to lease
+	case boxHead == head:
+		fmt.Fprintf(o.Out, "  already at %s\n", short(head))
+		return true
+	case boxHead == imported:
+		// Exactly what aif brought over: the rewrite is the only difference.
+	default:
+		// Anything else has to be proved harmless before it is overwritten. Behind the signed
+		// history is fine; ahead of it is the box's own work and only the box has it.
+		if err := g.run("fetch", "--quiet", o.Box, branch); err != nil ||
+			exec.Command("git", "merge-base", "--is-ancestor", boxHead, head).Run() != nil {
+			fmt.Fprintf(o.Out, "  %s is at %s there, which is neither the %s this run imported nor\n"+
+				"  an ancestor of the signed %s: it committed while signing ran, and those commits are\n"+
+				"  only on the box. Nothing was overwritten. On the box, put its new commits on top of\n"+
+				"  the signed branch, then re-run:\n"+
+				"    git fetch %s %s && git rebase --onto FETCH_HEAD %s %s\n",
+				branch, short(boxHead), short(imported), short(head), o.Remote, branch, short(imported), branch)
+			return false
+		}
+	}
+
+	// --no-verify, and only here. A Mac doing this job has a pre-push hook refusing commits it
+	// cannot verify a signature on, which is exactly right for the push to GitHub and wrong for
+	// this one twice over: the branch reaching the box is unsigned by construction on the recovery
+	// path, and the range the hook measures is the whole history, since there is no
+	// remote-tracking ref for the box to bound it. In aperture that came to 53 commits from
+	// before the repo signed anything, none of them this branch's, and it blocked the push that
+	// keeps the two machines on one lineage. The box cannot push to GitHub, so nothing reaches
+	// GitHub unchecked by skipping it; the push above, which does, keeps the hook.
+	args := append([]string{"push", "--no-verify"}, lease...)
+	if err := g.run(append(args, o.Box, branch)...); err != nil {
+		fmt.Fprintf(o.Out, "  push to %s failed: %v\n", o.Box, err)
+		fmt.Fprintf(o.Out, "  denyCurrentBranch in that message: run once on the box,\n"+
+			"    git -C projects/<repo> config receive.denyCurrentBranch updateInstead\n"+
+			"  the working tree in it: the box has uncommitted changes, which that setting refuses\n"+
+			"  rather than overwrite. Commit or stash them there and re-run.\n")
+		return false
+	}
+	fmt.Fprintf(o.Out, "  %s %s → %s\n", o.Box, branch, short(head))
+	return true
+}
+
+// boxReceiveProbe asks the two questions that decide whether the push at the end of signing can
+// land: what receive.denyCurrentBranch is set to there, and whether a tracked file is modified.
+// `git config <key>` exits non-zero for a key that is not set, which is the common answer and the
+// one that matters, hence the `|| echo unset`.
+const boxReceiveProbe = `cd %s 2>/dev/null || { echo checkout=missing; exit 0; }
+echo "deny=$(git config receive.denyCurrentBranch 2>/dev/null || echo unset)"
+` + boxDirty
+
+// checkBoxCanReceive makes the box able to take the rewrite before the rewrite exists.
+//
+// alignBox has to run after the push to the remote, because the box must never be moved to a
+// history the remote rejected, so a box that cannot receive that push is discovered when the
+// signed history is already on GitHub. That is exactly the two-lineage state all of this exists
+// to stay out of, and both things that stop the push are one ssh call away, so they are answered
+// here instead.
+//
+// receive.denyCurrentBranch is set rather than reported. git defaults it to "refuse", so a
+// checkout nobody configured rejects every push into the branch it has out, and "warn" or
+// "ignore" take the push while leaving the working tree behind, which is worse. Aperture's
+// checkout was never set: every align push since alignBox existed failed with a hint at the tail
+// of a long run, and every following round refused to sign. The setting is there only so this
+// tool's own push can land, it is not source, and that push already rewrites the box's working
+// tree, which is a great deal more than a line in its config. A setup command the operator has to
+// remember is the step that gets skipped.
+//
+// A modified tracked file is a refusal, not a fix. updateInstead declines the push rather than
+// overwrite it, and what becomes of the box's uncommitted work is not this machine's call. It is
+// the same stop `sand status` already prints.
+//
+// An unreachable box or a missing checkout is neither. Neither says anything about whether the
+// branch should be signed, and alignBox reports both after the push with nothing lost.
+func checkBoxCanReceive(o SignOpts) error {
+	if o.BoxHost == "" || o.BoxDir == "" {
+		return nil
+	}
+	where := o.BoxHost + ":" + o.BoxDir
+	out, err := exec.Command(sshBin(), o.BoxHost, fmt.Sprintf(boxReceiveProbe, remoteQuote(o.BoxDir))).Output()
+	if err != nil {
+		fmt.Fprintf(o.Out, "\nCould not ask %s whether it can take the rewrite: %v\n", where, err)
+		return nil
+	}
+
+	deny, dirty := "", 0
+	for _, line := range strings.Split(string(out), "\n") {
+		k, v, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if !ok {
+			continue
+		}
+		switch k {
+		case "checkout":
+			fmt.Fprintf(o.Out, "\nNo checkout at %s, so the rewrite has nowhere to go back to.\n", where)
+			return nil
+		case "deny":
+			deny = v
+		case "dirty":
+			dirty, _ = strconv.Atoi(v)
+		}
+	}
+
+	if dirty > 0 {
+		return fmt.Errorf("refusing to sign: %s has %d uncommitted tracked file(s), so the signed branch "+
+			"cannot be handed back to it and the next round would arrive with unsigned copies of commits "+
+			"already pushed. Commit or stash them there first:\n  ssh %s 'cd %s && git status --short'",
+			where, dirty, o.BoxHost, o.BoxDir)
+	}
+	if deny == "updateInstead" {
+		return nil
+	}
+	fix := fmt.Sprintf("ssh %s 'cd %s && git config receive.denyCurrentBranch updateInstead'", o.BoxHost, o.BoxDir)
+	if o.DryRun {
+		fmt.Fprintf(o.Out, "\ndry run: receive.denyCurrentBranch is %q on %s, which refuses the push that "+
+			"hands the signed branch back; a real run sets it to updateInstead\n", deny, where)
+		return nil
+	}
+	set := fmt.Sprintf("cd %s && git config receive.denyCurrentBranch updateInstead", remoteQuote(o.BoxDir))
+	if err := exec.Command(sshBin(), o.BoxHost, set).Run(); err != nil {
+		return fmt.Errorf("%s has receive.denyCurrentBranch=%s, which refuses the push that hands the signed "+
+			"branch back, and setting it here failed: %w\n  %s", where, deny, err, fix)
+	}
+	fmt.Fprintf(o.Out, "\nSet receive.denyCurrentBranch=updateInstead on %s (was %q), without which the push "+
+		"at the end of signing is refused and the box keeps building on the replaced lineage.\n", where, deny)
+	return nil
+}
+
+// checkPreSigningLineage refuses to sign a commit whose signed twin is already on the pushed
+// branch. Identical tree and identical subject is what a signing rewrite leaves behind, so a
+// match means this branch was built on the lineage the last round replaced: signing it again
+// would push a second copy of work that is already there, and every hash quoted in an earlier
+// reply would be joined by a duplicate.
+//
+// alignBox is what keeps this from happening. This is the stop for the runs that got past it:
+// a push the operator declined, a box whose tree was dirty when the realignment came, a branch
+// someone moved by hand.
+//
+// The recovery it prints has to run here and end on the box, in that order, because `aif` resets
+// this checkout to the box's branch at the top of every run: a rebase done here and not pushed
+// to the box is undone by the next `sand sign` before it reads anything. Only the Mac can do the
+// rebase at all, since only the Mac can see <remote>/<branch>.
+//
+// <remote>/<base> is checked as well as <remote>/<branch>, and it is the worse of the two. A twin
+// on the branch is undone by replacing the branch; a twin on main is merged, permanent, and
+// already carries whatever signature it was given. This repo grew seven such pairs, same trees,
+// both copies signed, one set on main and one on the branch, from two rounds signing the same box
+// originals. Nothing said so until the two refused to merge.
+func checkPreSigningLineage(g gitCmd, dirty []string, remote, base, branch, head, box string) error {
+	remoteBranch, remoteBase := remote+"/"+branch, remote+"/"+base
+	twins, err := duplicatedOnRemote(g, dirty, remoteBranch, remoteBase)
+	if err != nil {
+		return err
+	}
+	if len(twins) == 0 {
+		return nil
+	}
+
+	// dirty is oldest first, so the last commit with a twin is the boundary: everything above
+	// it is the work that exists only here, and is what has to be replayed.
+	var dups []string
+	boundary, merged := "", false
+	for _, d := range twins {
+		dups = append(dups, fmt.Sprintf("  %s is an unsigned copy of %s on %s: %q",
+			short(d.SHA), short(d.Twin), d.On, d.Subject))
+		boundary = d.SHA
+		merged = merged || d.On == remoteBase
+	}
+
+	// A commit whose twin is on the base is already merged, so it has to go rather than move:
+	// rebasing onto the base drops it, since git skips what is upstream by patch id.
+	fix := fmt.Sprintf("  git rebase --onto %s %s %s", remoteBranch, short(boundary), branch)
+	if merged {
+		fix = fmt.Sprintf("  git rebase %s %s   # drops the ones already merged", remoteBase, branch)
+	}
+	if box != "" {
+		// Leased against the head this run imported, which is the box's, so a box that has
+		// moved since rejects the push instead of losing the commits that moved it.
+		// --no-verify for the reason alignBox gives: the branch this hands the box is unsigned,
+		// which is the whole point of handing it over, and a signature hook here stops the
+		// recovery from being runnable at all.
+		fix += fmt.Sprintf("\n  git push --no-verify --force-with-lease=refs/heads/%s:%s %s %s\n"+
+			"  sand sign --push", branch, head, box, branch)
+	}
+	where := remoteBranch
+	if merged {
+		where = remoteBase + " or " + remoteBranch
+	}
+	return fmt.Errorf("refusing to sign: %d commit(s) are unsigned copies of commits already on %s.\n%s\n"+
+		"This branch was built on a lineage an earlier signing round replaced, so signing it would put a\n"+
+		"second copy of work that is already there on the remote. A twin on a branch goes away when the\n"+
+		"branch is replaced; a twin on the base is merged and permanent. Drop or replay what is duplicated,\n"+
+		"here on the Mac, then give the box the result before signing again: aif resets this checkout to\n"+
+		"the box's branch, so a rebase the box has not been told about is undone by the next run.\n%s",
+		len(dups), where, strings.Join(dups, "\n"), fix)
+}
+
+// dupCommit is one commit whose twin is already on the remote: same tree, same subject, a
+// different hash because one of the two carries a signature.
+type dupCommit struct {
+	SHA     string
+	Twin    string
+	On      string // the ref the twin sits on
+	Subject string
+}
+
+// duplicatedOnRemote finds, for each of commits, a twin already pushed. Two callers ask it in
+// opposite directions and it has to be one implementation: signing refuses to add a second copy
+// of work that is already there, and status reports the same state before anyone runs signing.
+//
+// The base is checked second so a commit with a twin on both refs is reported against the base,
+// which is the worse of the two: a twin on a branch goes away when the branch is replaced, a
+// twin on the base is merged and permanent.
+func duplicatedOnRemote(g gitCmd, commits []string, remoteBranch, remoteBase string) ([]dupCommit, error) {
+	pushed := map[string][]string{}
+	on := map[string]string{} // identity -> the ref its twin sits on
+	for _, ref := range []string{remoteBranch, remoteBase} {
+		if !g.refExists(ref) {
+			continue
+		}
+		ids, err := g.identities(ref)
+		if err != nil {
+			return nil, err
+		}
+		for id, shas := range ids {
+			pushed[id], on[id] = shas, ref
+		}
+	}
+
+	var dups []dupCommit
+	for _, sha := range commits {
+		id, err := g.identity(sha)
+		if err != nil {
+			return nil, err
+		}
+		if twins := pushed[id]; len(twins) > 0 {
+			dups = append(dups, dupCommit{SHA: sha, Twin: twins[0], On: on[id], Subject: identitySubject(id)})
+		}
+	}
+	return dups, nil
+}
+
+// commitIdentity is what a signing rewrite preserves and a hash does not: the tree and the
+// subject. Two commits sharing it are the same work, signed and unsigned.
+const commitIdentity = "%T%x00%s"
+
+func (g gitCmd) identity(rev string) (string, error) {
+	return g.capture("show", "-s", "--format="+commitIdentity, rev)
+}
+
+// identities maps that key to the commits on a ref that carry it. Bounded like the scan in
+// commitOnBranch: a review branch is tens of commits, and reading a repository's whole history
+// to answer this is not worth the wait.
+func (g gitCmd) identities(ref string) (map[string][]string, error) {
+	list, err := g.capture("log", "--format=%H%x00"+commitIdentity, "-n", "500", ref)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[string][]string)
+	for _, line := range strings.Split(list, "\n") {
+		sha, id, ok := strings.Cut(line, "\x00")
+		if ok {
+			byID[id] = append(byID[id], sha)
+		}
+	}
+	return byID, nil
+}
+
+func identitySubject(id string) string {
+	_, subject, _ := strings.Cut(id, "\x00")
+	return subject
 }
 
 // splitBySigning divides the branch-unique commits into the ones the rewrite has to touch and
@@ -452,22 +858,17 @@ func commitOnBranch(g gitCmd, recorded, branchRef string) (string, commitState) 
 		return recorded, commitCurrent
 	}
 
-	want, err := g.capture("show", "-s", "--format=%T%x00%s", full)
+	want, err := g.identity(full)
 	if err != nil {
 		return recorded, commitUnknown
 	}
-	// Bounded: a review branch is tens of commits, and scanning a repository's whole history
-	// to rescue one hash is not worth the wait.
-	list, err := g.capture("log", "--format=%H%x00%T%x00%s", "-n", "500", branchRef)
+	onBranch, err := g.identities(branchRef)
 	if err != nil {
 		return recorded, commitUnknown
 	}
 	var matches []string
-	for _, line := range strings.Split(list, "\n") {
-		sha, rest, ok := strings.Cut(line, "\x00")
-		if ok && rest == want {
-			matches = append(matches, short(sha))
-		}
+	for _, sha := range onBranch[want] {
+		matches = append(matches, short(sha))
 	}
 	switch len(matches) {
 	case 0:

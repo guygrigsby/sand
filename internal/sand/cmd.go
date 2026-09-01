@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -26,6 +27,7 @@ var (
 	flagAgent     string
 	flagNoAgent   bool
 	flagRepoDir   string
+	flagLogLines  int
 )
 
 // betweenPosts is a base courtesy delay between reply POSTs. The replies endpoint sends
@@ -53,7 +55,35 @@ func root() *cobra.Command {
 	}
 	c.PersistentFlags().StringVar(&flagHost, "host", "", "sandbox ssh alias or user@host (overrides config)")
 	c.PersistentFlags().StringVar(&flagRemoteDir, "remote-dir", "", "base dir on the sandbox (overrides config)")
-	c.AddCommand(commentsCmd(), configCmd(), newCmd(), signCmd(), skillCmd(), upCmd())
+	c.AddCommand(ciCmd(), commentsCmd(), configCmd(), newCmd(), shotCmd(), signCmd(), skillCmd(),
+		statusCmd(), upCmd())
+	return c
+}
+
+func shotCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:     "shot [file]",
+		Aliases: []string{"screenshot"},
+		Short:   "Grab a screenshot and put it on the sandbox",
+		Long: "Runs the interactive crop (screencapture -i, the cmd-shift-4 selection), sends the\n" +
+			"image to <remote-dir>/" + shotDir + "/ on the box and copies that path to the clipboard,\n" +
+			"so it can be pasted straight into a prompt for an agent running there.\n\n" +
+			"With a file argument it sends that file instead of capturing, which is also how it\n" +
+			"works anywhere there is no screen to grab.",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := Resolve(flagHost, flagRemoteDir)
+			if err != nil {
+				return err
+			}
+			file := ""
+			if len(args) > 0 {
+				file = args[0]
+			}
+			return Shot(cfg, file, flagDryRun, cmd.OutOrStdout())
+		},
+	}
+	c.Flags().BoolVar(&flagDryRun, "dry-run", false, "say what would be sent, send nothing")
 	return c
 }
 
@@ -131,14 +161,18 @@ func runUp(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Println("\n1/4 sign")
+	boxURL, boxHost, boxDir := thisRepoOnBox()
 	res, err := Sign(SignOpts{
 		Branch:            branch,
 		Remote:            flagRemote,
 		Base:              flagBase,
 		Yes:               flagYes,
 		AllowOtherAuthors: flagOtherAuth,
-		// sign pushes what it rewrote itself; step 2 covers the branch that needed no
-		// rewrite at all and was never pushed.
+		Box:               boxURL,
+		BoxHost:           boxHost,
+		BoxDir:            boxDir,
+		// sign pushes what it rewrote, and a fully-signed branch the remote is behind; step 2
+		// is what proves the remote agrees, and pushes only if something declined to.
 		Push:   !flagDryRun,
 		DryRun: flagDryRun,
 		In:     cmd.InOrStdin(),
@@ -153,6 +187,12 @@ func runUp(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Printf("  %s: %d commit(s), %d signed now, %d already signed and unmoved\n",
 		branch, res.Total, res.Rewritten, res.Kept)
+	// A rewrite that reached GitHub but not the box is the state that ends in two lineages,
+	// so it gets a line of its own rather than being left in the signing output above.
+	if res.Rewritten > 0 && res.Pushed && !res.BoxAligned {
+		warn("the box is still on the pre-signing branch; the reasons are above and the next round " +
+			"will refuse to sign until it is realigned")
+	}
 
 	fmt.Println("\n2/4 push")
 	if err := ensurePushed(branch); err != nil {
@@ -252,6 +292,7 @@ func signCmd() *cobra.Command {
 			"develop, trunk or release/*.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			boxURL, boxHost, boxDir := thisRepoOnBox()
 			o := SignOpts{
 				Remote:            flagRemote,
 				Base:              flagBase,
@@ -261,6 +302,9 @@ func signCmd() *cobra.Command {
 				In:                cmd.InOrStdin(),
 				Out:               cmd.OutOrStdout(),
 				AllowOtherAuthors: flagOtherAuth,
+				Box:               boxURL,
+				BoxHost:           boxHost,
+				BoxDir:            boxDir,
 			}
 			if len(args) > 0 {
 				o.Branch = args[0]
@@ -277,6 +321,60 @@ func signCmd() *cobra.Command {
 	c.Flags().BoolVar(&flagPush, "push", false, "push with --force-with-lease once verified, without asking")
 	c.Flags().BoolVar(&flagDryRun, "dry-run", false, "show what would be signed, rewrite nothing and push nothing")
 	return c
+}
+
+func statusCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "status [pr-number|pr-url]",
+		Short: "Where the work is, on all three machines, and what to run next",
+		Long: "Reads this Mac, the box and GitHub at once and prints one `next:` line.\n\n" +
+			"Changes nothing anywhere. It does fetch: from the remote, so every count is\n" +
+			"measured against current refs, and from the box into FETCH_HEAD, because\n" +
+			"whether its commits are copies of pushed ones is a question about trees.\n\n" +
+			"A branch with no open PR is fine; the GitHub half is simply skipped.",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, target, hasPR, err := setupStatus(args)
+			if err != nil {
+				return err
+			}
+			boxURL, _, _ := thisRepoOnBox()
+			return Status(StatusOpts{
+				Cfg: cfg, Target: target, HasPR: hasPR,
+				Remote: flagRemote, Base: flagBase,
+				Box: boxURL, RepoDir: flagRepoDir,
+				Out: cmd.OutOrStdout(),
+			})
+		},
+	}
+	c.Flags().StringVar(&flagPR, "pr", "", "PR number or URL (default: the PR for the current branch)")
+	c.Flags().StringVar(&flagRemote, "remote", "origin", "remote to measure against")
+	c.Flags().StringVar(&flagBase, "base", "main", "base branch on that remote")
+	c.Flags().StringVar(&flagRepoDir, "repo-dir", "", "the repo checkout on the box (default ~/projects/<repo>)")
+	return c
+}
+
+// setupStatus is setup for a command that must survive there being no PR. Every other command
+// here acts on one and can insist; status is the one you run to find out what state you are in,
+// including "the branch exists and nothing has been opened for it yet".
+func setupStatus(args []string) (Config, Target, bool, error) {
+	cfg, err := Resolve(flagHost, flagRemoteDir)
+	if err != nil {
+		return cfg, Target{}, false, err
+	}
+	arg, err := prArg(args)
+	if err != nil {
+		return cfg, Target{}, false, err
+	}
+	if arg != "" {
+		target, err := ResolveTarget(arg)
+		if err != nil {
+			return cfg, Target{}, false, err
+		}
+		return cfg, target, true, target.LoadURL()
+	}
+	target, found, err := currentBranchPR()
+	return cfg, target, found, err
 }
 
 func skillCmd() *cobra.Command {
@@ -374,6 +472,303 @@ func commentsCmd() *cobra.Command {
 
 	c.AddCommand(pull, push)
 	return c
+}
+
+func ciCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "ci",
+		Short: "Move failing CI checks to the sandbox",
+	}
+
+	pull := &cobra.Command{
+		Use:   "pull [pr-number|pr-url]",
+		Short: "Fetch a PR's failing checks and put them on the sandbox",
+		Long: "Asks GitHub which of the PR's checks failed, fetches the failed steps of each\n" +
+			"Actions run and writes one markdown file per failing check to\n" +
+			"<remote-dir>/<owner>/<repo>/pr-<n>/ci/ on the sandbox. Safe to re-run: notes\n" +
+			"already written on the box are preserved, and a check that has gone green keeps\n" +
+			"its file, updated to say so.\n\n" +
+			"Then starts an agent on the box in that repo's checkout, under the same lock as\n" +
+			"`comments pull`, and streams what it does. There is no `ci push`: a red check is\n" +
+			"answered by a commit, not by a comment, so `sand up` publishes the fix and the\n" +
+			"next CI run is the verdict.\n\n" +
+			"A check that is not a GitHub Actions run (Buildkite and anything else posting a\n" +
+			"commit status) gets a file with its state and link and no log: this machine has\n" +
+			"no client for it.",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error { return runCIPull(args) },
+	}
+	pull.Flags().StringVar(&flagPR, "pr", "", "PR number or URL (default: the PR for the current branch)")
+	pull.Flags().BoolVar(&flagAll, "all", false, "list the passing and pending checks in index.md too")
+	pull.Flags().IntVar(&flagLogLines, "log-lines", defaultLogLines, "lines of each failed log to keep, from the end")
+	pull.Flags().BoolVar(&flagDryRun, "dry-run", false, "show what would be written, send nothing")
+	pull.Flags().BoolVar(&flagNoAgent, "no-agent", false, "write the files and stop, starting nothing on the box")
+	pull.Flags().StringVar(&flagAgent, "agent", "", "run this command on the box instead of the configured harness")
+	pull.Flags().StringVar(&flagRepoDir, "repo-dir", "", "checkout on the box to run it in (default ~/projects/<repo>)")
+
+	c.AddCommand(pull)
+	return c
+}
+
+func runCIPull(args []string) error {
+	cfg, target, err := setup(args)
+	if err != nil {
+		return err
+	}
+	if err := target.LoadURL(); err != nil {
+		return err
+	}
+
+	checks, err := FetchChecks(target)
+	if err != nil {
+		return err
+	}
+	failing := map[string]Check{}
+	var others []Check
+	for _, c := range checks {
+		if c.Failed() {
+			failing[c.Name] = c
+			continue
+		}
+		others = append(others, c)
+	}
+
+	ciPath := target.CIPath(cfg.RemoteDir)
+
+	// Read what is on the box first, so notes written there survive a re-pull.
+	existingDir, err := fetchDir(cfg.Host, ciPath)
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(existingDir)
+	onBox, err := loadCIFiles(existingDir)
+	if err != nil {
+		return err
+	}
+
+	files := make([]CIFailure, 0, len(failing)+len(onBox))
+	for _, c := range checks {
+		if c.Failed() {
+			files = append(files, ciFile(target, c, flagLogLines))
+		}
+	}
+	// A file already on the box whose check is no longer failing is refreshed rather than
+	// left alone: the transport adds and never deletes, so leaving it would have the agent
+	// reading `bucket: fail` about a check that is green, with a log from a run that has
+	// been superseded. The merge below gives it its notes and its commit back.
+	current := byName(checks)
+	for _, old := range onBox {
+		if _, still := failing[old.Meta.Check]; still {
+			continue
+		}
+		files = append(files, greenAgain(old, current[old.Meta.Check]))
+	}
+	sort.SliceStable(files, func(i, j int) bool { return files[i].Meta.Check < files[j].Meta.Check })
+
+	outDir, err := os.MkdirTemp("", "sand-ci-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(outDir)
+
+	byCheck := map[string]CIFailure{}
+	for _, f := range onBox {
+		byCheck[f.Meta.Check] = f
+	}
+	var pending, noted int
+	for i := range files {
+		f := &files[i]
+		if old, ok := byCheck[f.Meta.Check]; ok {
+			f.Merge(old)
+		}
+		if f.Meta.Bucket == bucketFail {
+			if f.Fixed() || f.Notes != "" {
+				noted++
+			} else {
+				pending++
+			}
+		}
+		body, err := f.Render()
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(outDir, f.Filename()), []byte(body), 0o644); err != nil {
+			return err
+		}
+	}
+	listed := others
+	if !flagAll {
+		listed = nil
+	}
+	index := RenderCIIndex(target, files, listed, time.Now().Format(time.RFC3339))
+	if err := os.WriteFile(filepath.Join(outDir, "index.md"), []byte(index), 0o644); err != nil {
+		return err
+	}
+
+	fmt.Printf("%s#%d %q: %d failing check(s) of %d — %d to fix, %d already worked on\n",
+		target.Slug(), target.Number, target.Title, len(failing), len(checks), pending, noted)
+	for _, f := range files {
+		fmt.Printf("  %-28s %-10s %-8s %s\n", f.Filename(), f.Meta.Bucket, f.Meta.Status, f.Meta.Check)
+	}
+	if len(failing) == 0 {
+		fmt.Println("nothing failing" + hintAll(others))
+	}
+
+	start := !flagNoAgent && pending > 0
+	var run AgentRun
+	if start {
+		if run, err = agentRun(cfg, target, ciPrompt(target, ciPath, pending)); err != nil {
+			return err
+		}
+	}
+
+	if flagDryRun {
+		fmt.Printf("dry run: would write the above to %s:%s\n", cfg.Host, ciPath)
+		if start {
+			fmt.Printf("dry run: would run in %s:%s\n  %s <prompt>\n",
+				cfg.Host, run.Dir, strings.Join(run.Command, " "))
+		}
+		return nil
+	}
+	if err := sendDir(cfg.Host, outDir, ciPath); err != nil {
+		return err
+	}
+	fmt.Printf("→ %s:%s (start at index.md)\n", cfg.Host, ciPath)
+	if !start {
+		if !flagNoAgent && pending == 0 {
+			fmt.Println("nothing to fix, so no agent started")
+		}
+		return nil
+	}
+
+	fmt.Printf("\nstarting the agent in %s:%s, Ctrl-C to stop it\n\n", cfg.Host, run.Dir)
+	agentErr := RunAgent(run)
+	// Either way: an agent that died halfway may still have fixed most of them, and which
+	// ones is the difference between re-running and reading the files by hand.
+	if err := reportCIProgress(cfg, ciPath); err != nil {
+		warn(fmt.Sprintf("could not read the checks back: %v", err))
+	}
+	return agentErr
+}
+
+// hintAll is the difference between "the PR is green" and "gh answered with nothing", which
+// look the same from a table with no rows in it.
+func hintAll(others []Check) string {
+	switch {
+	case len(others) == 0:
+		return ": gh reported no checks at all for this PR"
+	case flagAll:
+		return fmt.Sprintf(": %d other check(s), listed in index.md", len(others))
+	}
+	return fmt.Sprintf(": %d other check(s), --all lists them", len(others))
+}
+
+// ciFile is one failing check as a file, log fetched when there is one to fetch. A log that
+// cannot be read is a note in the file rather than an error: the other checks still have
+// theirs, and the link is in the front matter either way.
+func ciFile(t Target, c Check, logLines int) CIFailure {
+	f := CIFailure{Meta: CIMeta{
+		Check: c.Name, Workflow: c.Workflow, Bucket: c.Bucket, State: c.State,
+		Link: c.Link, RunID: c.RunID,
+		PulledAt: time.Now().Format(time.RFC3339), Status: StatusPending,
+	}}
+	if c.RunID == "" {
+		f.LogNote = "This check is not a GitHub Actions run, so the Mac has no way to fetch its " +
+			"log. Open the link above."
+		return f
+	}
+	log, dropped, err := FailedLog(t, c.RunID, logLines)
+	if err != nil {
+		warn(fmt.Sprintf("no log for %q: %v", c.Name, err))
+		f.LogNote = fmt.Sprintf("The log could not be fetched (%v). Open the link above.", err)
+		return f
+	}
+	f.Log, f.Dropped = log, dropped
+	return f
+}
+
+// greenAgain refreshes a file whose check has stopped failing. c is the zero Check when the
+// check is not in the list at all any more, which happens when a workflow is renamed or
+// removed: the file says that rather than quietly keeping the old verdict.
+func greenAgain(old CIFailure, c Check) CIFailure {
+	f := CIFailure{Meta: old.Meta} // the notes come back through Merge, like every other file's
+	f.Meta.Bucket, f.Meta.State = c.Bucket, c.State
+	f.Meta.PulledAt = time.Now().Format(time.RFC3339)
+	if c.Name == "" {
+		f.LogNote = "GitHub no longer reports this check on the PR at all."
+		return f
+	}
+	if c.Link != "" {
+		f.Meta.Link, f.Meta.RunID = c.Link, c.RunID
+	}
+	f.LogNote = fmt.Sprintf("This check is not failing any more (%s). Nothing to do.", c.Bucket)
+	return f
+}
+
+func byName(checks []Check) map[string]Check {
+	out := make(map[string]Check, len(checks))
+	for _, c := range checks {
+		out[c.Name] = c
+	}
+	return out
+}
+
+// loadCIFiles reads the CI files in dir, warning about and skipping any it cannot parse. One
+// mangled file is not worth losing the notes in the others over.
+func loadCIFiles(dir string) ([]CIFailure, error) {
+	paths, err := filepath.Glob(filepath.Join(dir, "ci-*.md"))
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(paths)
+	var out []CIFailure
+	for _, p := range paths {
+		raw, err := os.ReadFile(p)
+		if err != nil {
+			return nil, err
+		}
+		f, err := ParseCIFailure(string(raw))
+		if err != nil {
+			warn(fmt.Sprintf("%s: %v (skipped)", filepath.Base(p), err))
+			continue
+		}
+		out = append(out, f)
+	}
+	return out, nil
+}
+
+// reportCIProgress says which checks came back with a fix recorded and which were left.
+func reportCIProgress(cfg Config, ciPath string) error {
+	dir, err := fetchDir(cfg.Host, ciPath)
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	files, err := loadCIFiles(dir)
+	if err != nil {
+		return err
+	}
+
+	var fixed, left int
+	fmt.Println()
+	for _, f := range files {
+		if f.Meta.Bucket != bucketFail {
+			continue
+		}
+		switch {
+		case f.Fixed() || f.Notes != "":
+			fixed++
+			fmt.Printf("  worked %-28s %s\n", f.Meta.Check, f.Meta.Commit)
+		default:
+			left++
+			fmt.Printf("  left   %-28s\n", f.Meta.Check)
+		}
+	}
+	fmt.Printf("%d worked on, %d left\n", fixed, left)
+	if fixed > 0 {
+		fmt.Println("next: sand up (signs and pushes the fixes; CI re-runs on the new head)")
+	}
+	return nil
 }
 
 func configCmd() *cobra.Command {
@@ -490,6 +885,50 @@ func setup(args []string) (Config, Target, error) {
 
 func warn(msg string) { fmt.Fprintln(os.Stderr, "sand: warning:", msg) }
 
+// thisRepoOnBox is the box's checkout of this repo, twice over: as the git URL signing pushes the
+// history it rewrote to, and as the ssh host and path the pre-flight asks questions over. Both,
+// because a push URL cannot carry a question and splitting one back apart guesses at where the
+// host ends. The box keeps every repo at ~/projects/<repo> (checkoutDir), and both forms are
+// relative to the login home, so they land in the same place.
+//
+// The repo name comes from this checkout's directory rather than from `gh`: signing is the one
+// command in here that needs nothing from GitHub, and asking it for a name this machine already
+// knows would make a missing token break history rewriting. All three are empty when there is no
+// configured host or this is not a checkout, which alignBox reports rather than guessing at a box.
+func thisRepoOnBox() (url, host, dir string) {
+	cfg, err := Resolve(flagHost, flagRemoteDir)
+	if err != nil {
+		return "", "", ""
+	}
+	top, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		return "", "", ""
+	}
+	dir = "projects/" + segment(filepath.Base(strings.TrimSpace(string(top))))
+	return cfg.Host + ":" + dir, cfg.Host, dir
+}
+
+// agentRun is the agent both pulls start: same box, same checkout, same lock, only the prompt
+// differs. One place, because the lock is the part that must not vary — two pulls that named
+// it differently would each think they were the only agent in the tree.
+func agentRun(cfg Config, target Target, prompt string) (AgentRun, error) {
+	argv := strings.Fields(flagAgent)
+	if len(argv) == 0 {
+		var err error
+		if argv, err = agentCommand(cfg); err != nil {
+			return AgentRun{}, err
+		}
+	}
+	return AgentRun{
+		Host:    cfg.Host,
+		Dir:     cmp.Or(flagRepoDir, checkoutDir(target)),
+		Lock:    agentLock(cfg.RemoteDir, target.Repo),
+		Command: argv,
+		Prompt:  prompt,
+		Out:     os.Stdout,
+	}, nil
+}
+
 func runPull(args []string) error {
 	cfg, target, err := setup(args)
 	if err != nil {
@@ -579,19 +1018,8 @@ func runPull(args []string) error {
 	start := !flagNoAgent && len(threads)-replied > 0
 	var run AgentRun
 	if start {
-		argv := strings.Fields(flagAgent)
-		if len(argv) == 0 {
-			if argv, err = agentCommand(cfg); err != nil {
-				return err
-			}
-		}
-		run = AgentRun{
-			Host:    cfg.Host,
-			Dir:     cmp.Or(flagRepoDir, checkoutDir(target)),
-			Lock:    agentLock(cfg.RemoteDir, target.Repo),
-			Command: argv,
-			Prompt:  agentPrompt(target, remotePath, len(threads)-replied),
-			Out:     os.Stdout,
+		if run, err = agentRun(cfg, target, agentPrompt(target, remotePath, len(threads)-replied)); err != nil {
+			return err
 		}
 	}
 

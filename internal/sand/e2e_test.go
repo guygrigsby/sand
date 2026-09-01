@@ -25,6 +25,12 @@ case "$*" in
   *"repo view"*)  echo '{"nameWithOwner":"o/r"}' ;;
   *"issue view"*) echo '{"title":"Fix the thing, safely!","url":"https://github.com/o/r/issues/42","body":"The fd leaks."}' ;;
   *"/commits?"*)  cat "$GH_COMMITS" ;;
+  *"pr checks"*)
+    cat "$GH_CHECKS"
+    # gh exits non-zero when a check has failed, which is every run this command is for.
+    exit "${GH_CHECKS_EXIT:-1}"
+    ;;
+  *"run view"*)   cat "$GH_RUNLOG" ;;
   *"api user"*)   echo guy ;;
   *graphql*)      cat "$GH_FIXTURE" ;;
   *"pr create"*)
@@ -40,6 +46,15 @@ case "$*" in
     else echo '[{"number":42,"url":"https://github.com/o/r/pull/42","title":"Fix the thing","headRefName":"topic"}]'; fi
     ;;
   *"pr view"*)
+    # A bare "pr view" guesses the head repo from the local remotes, and in aperture the box
+    # remote (guy-llm-sandbox:projects/aperture) reads as owner "projects". Naming the PR or the
+    # repo leaves nothing to guess, so only the bare form fails here.
+    if [ "$GH_BAD_HEAD_GUESS" = 1 ]; then
+      case "$*" in
+        *--repo*) ;;
+        *) echo 'no pull requests found for branch "projects:topic"' >&2; exit 1 ;;
+      esac
+    fi
     if [ "$GH_PR_MISSING" = 1 ] && [ ! -e "$GH_CREATED" ]; then
       echo 'no pull requests found' >&2
       exit 1
@@ -118,6 +133,8 @@ func harness(t *testing.T) (remoteBase, ghLog string) {
 	sshPath := write("ssh-shim", fakeSSH, 0o755)
 	fixturePath := write("fixture.json", fixture, 0o644)
 	commitsPath := write("commits.json", signedCommits, 0o644)
+	checksPath := write("checks.json", checksFixture, 0o644)
+	runLogPath := write("run.log", runLogFixture, 0o644)
 
 	ghLog = filepath.Join(dir, "gh.log")
 	remoteBase = filepath.Join(dir, "box")
@@ -127,21 +144,28 @@ func harness(t *testing.T) (remoteBase, ghLog string) {
 	t.Setenv("GH_LOG", ghLog)
 	t.Setenv("GH_FIXTURE", fixturePath)
 	t.Setenv("GH_COMMITS", commitsPath)
+	t.Setenv("GH_CHECKS", checksPath)
+	t.Setenv("GH_RUNLOG", runLogPath)
 	t.Setenv("GH_CREATED", filepath.Join(dir, "pr-created"))
 	t.Setenv("GH_PR_BODY", filepath.Join(dir, "pr-body"))
 	t.Setenv("HOME", dir) // keep any real ~/.config/sand out of it
+	// Pinned, because it now defaults to $USER: a test that names a branch must not depend on
+	// who is running it. A test about the prefix itself sets its own after this.
+	t.Setenv("SAND_BRANCH_PREFIX", "guy")
 
 	flagHost = "box"
 	flagRemoteDir = remoteBase
 	flagPR = "42"
 	flagRemote = "origin"
 	flagDryRun, flagAll = false, false
+	flagLogLines = defaultLogLines
 	// Starting an agent is pull's job, not every test's: the ones about it opt in.
 	flagNoAgent, flagAgent, flagRepoDir = true, "", ""
 	betweenPosts = 0
 	t.Cleanup(func() {
 		flagHost, flagRemoteDir, flagPR, flagRemote = "", "", "", ""
 		flagNoAgent, flagAgent, flagRepoDir = false, "", ""
+		flagLogLines = 0
 		betweenPosts = 0
 	})
 	return remoteBase, ghLog
@@ -167,12 +191,15 @@ func TestNewCreatesIssueWorkspaceAndBranch(t *testing.T) {
 	mustRun(t, filepath.Dir(boxRepo), "git", "clone", "--quiet", remote, boxRepo)
 	flagBase = "main"
 	t.Cleanup(func() { flagBase = "" })
+	// The prefix is whoever is running this, not whoever wrote it. It was `guy/`, compiled in,
+	// so every coworker's `sand new` opened a branch in someone else's name.
+	t.Setenv("SAND_BRANCH_PREFIX", "kim")
 
 	if err := runNew([]string{"42"}); err != nil {
 		t.Fatalf("new: %v", err)
 	}
 
-	branch := "guy/42-fix-the-thing-safely"
+	branch := "kim/42-fix-the-thing-safely"
 	if got := mustRun(t, dir, "git", "branch", "--show-current"); got != branch {
 		t.Errorf("Mac branch %q, want %q", got, branch)
 	}
@@ -388,6 +415,36 @@ func TestPullRefusesASecondAgentInTheSameCheckout(t *testing.T) {
 	}
 }
 
+// A harness that is not on the box's PATH is the most likely first failure on a new box, and
+// it used to be reported as a lock failure: flock exits 69 when it cannot exec the command,
+// which was this tool's own code for "no flock". So the operator was told the checkout could
+// not be locked when the lock was fine and the agent binary was simply missing.
+func TestPullSaysWhenTheHarnessIsMissingOnTheBox(t *testing.T) {
+	remoteBase, _ := harness(t)
+	if err := os.MkdirAll(filepath.Join(os.Getenv("HOME"), "projects", "r"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	flagNoAgent, flagAgent = false, "sand-no-such-harness"
+	captureStdout(t)
+
+	err := runPull(nil)
+	if err == nil {
+		t.Fatal("pull reported success with no agent binary on the box")
+	}
+	if strings.Contains(err.Error(), "lock") {
+		t.Errorf("a missing harness was reported as a lock failure: %v", err)
+	}
+	for _, want := range []string{"sand-no-such-harness", "PATH"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not name %q: %v", want, err)
+		}
+	}
+	// And nothing was started, so the lock was never taken either.
+	if _, statErr := os.Stat(agentLock(remoteBase, "r")); statErr == nil {
+		t.Error("took the lock for an agent that could not run")
+	}
+}
+
 // Everything already answered and posted: starting an agent there costs a turn to be told
 // there is nothing to do.
 func TestPullSkipsTheAgentWhenNothingIsPending(t *testing.T) {
@@ -451,8 +508,11 @@ func TestPullDetectsPRFromBranch(t *testing.T) {
 	if err := runPull(nil); err != nil {
 		t.Fatalf("pull: %v", err)
 	}
-	if !strings.Contains(read(t, ghLog), "number,headRefName") {
-		t.Errorf("did not ask gh for the current branch's PR:\n%s", read(t, ghLog))
+	// Named repo, named head: the question with no local remote in it. The log is one
+	// argument per line, hence the two.
+	log := read(t, ghLog)
+	if !strings.Contains(log, "\n--head\n") || !strings.Contains(log, "number,title,url,headRefName") {
+		t.Errorf("did not ask gh for the current branch's PR by repo and head:\n%s", log)
 	}
 	if _, err := os.Stat(filepath.Join(remoteBase, "o", "r", "pr-42", "c-2043881.md")); err != nil {
 		t.Errorf("nothing landed for the detected PR: %v", err)
@@ -796,7 +856,9 @@ func TestUpPushesABranchThatNeededNoSigning(t *testing.T) {
 	if pushed != local {
 		t.Errorf("origin/topic at %q, local topic at %s\n%s", pushed, local, printed)
 	}
-	for _, want := range []string{"signed already", "origin/topic → " + short(local), "(was absent)"} {
+	// Step 1 pushes it, having nothing to sign but a remote behind the branch, so step 2 is the
+	// proof that the ref matches rather than the thing that moved it.
+	for _, want := range []string{"signed already", "origin/topic is already at " + short(local)} {
 		if !strings.Contains(printed, want) {
 			t.Errorf("output missing %q:\n%s", want, printed)
 		}

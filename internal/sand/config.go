@@ -2,6 +2,7 @@ package sand
 
 import (
 	"bufio"
+	"cmp"
 	"fmt"
 	"io"
 	"os"
@@ -14,10 +15,11 @@ import (
 
 // Config is ~/.config/sand/config.yaml. Flags and env override it; see Resolve.
 type Config struct {
-	Host      string `yaml:"host"`       // ssh alias or user@host for the sandbox
-	RemoteDir string `yaml:"remote_dir"` // base dir on the sandbox, ~ allowed
-	Harness   string `yaml:"harness"`    // agent CLI pull starts on the box: see harnesses
-	Model     string `yaml:"model"`      // model to pass it; empty means the harness's own default
+	Host         string `yaml:"host"`          // ssh alias or user@host for the sandbox
+	RemoteDir    string `yaml:"remote_dir"`    // base dir on the sandbox, ~ allowed
+	Harness      string `yaml:"harness"`       // agent CLI pull starts on the box: see harnesses
+	Model        string `yaml:"model"`         // model to pass it; empty means the harness's own default
+	BranchPrefix string `yaml:"branch_prefix"` // what `sand new` puts before <issue>-<title>
 }
 
 const (
@@ -25,7 +27,7 @@ const (
 	defaultHarness   = "claude"
 )
 
-// configDefault is what a key falls back to when neither the file nor the environment says.
+// configDefaults is what a key falls back to when neither the file nor the environment says.
 // Keyed by config key so a new field defaults, documents and overrides itself through the
 // same three tables rather than another if-empty line in Load.
 //
@@ -34,11 +36,19 @@ const (
 // means there is nothing sensible to guess: it names one specific machine on one specific
 // tailnet, and a compiled-in alias is either someone else's box or an alias that resolves
 // nowhere. `sand config init` asks for it instead, and every command that needs it says so.
-var configDefault = map[string]string{
-	"host":       "",
-	"remote_dir": defaultRemoteDir,
-	"harness":    defaultHarness,
-	"model":      "",
+//
+// A function rather than a table because one default is not a constant: the branch prefix is
+// whoever is running this, which is only knowable at run time. It was `guy/`, compiled into
+// `sand new`, so every other person's first branch was named after someone else and `up`
+// could not find the issue number in a branch they had named themselves.
+func configDefaults() map[string]string {
+	return map[string]string{
+		"host":          "",
+		"remote_dir":    defaultRemoteDir,
+		"harness":       defaultHarness,
+		"model":         "",
+		"branch_prefix": cmp.Or(os.Getenv("USER"), os.Getenv("LOGNAME")),
+	}
 }
 
 // ConfigPath is `~/.config/sand/config.yaml` on both machines, `XDG_CONFIG_HOME` first.
@@ -79,9 +89,10 @@ func loadFile() (Config, error) {
 func Load() (Config, error) {
 	c, err := loadFile()
 	fill := func() Config {
+		defaults := configDefaults()
 		for _, f := range configFields(&c) {
 			if *f.ptr == "" {
-				*f.ptr = configDefault[f.Key]
+				*f.ptr = defaults[f.Key]
 			}
 		}
 		return c
@@ -145,6 +156,8 @@ var configDoc = map[string]string{
 		"# `pull --no-agent` starts nothing; `pull --agent '<cmd>'` runs something else once.",
 	"model": "model to run it with, in that harness's own spelling. Empty means the\n" +
 		"# harness's default.",
+	"branch_prefix": "what `sand new` puts before <issue>-<title>, and what `sand up` reads\n" +
+		"# the issue number back out of. Unset means $USER.",
 }
 
 // configField is one settable key: its name in the file and the field behind it.
@@ -277,6 +290,7 @@ func ask(in io.Reader, out io.Writer, question string) string {
 func writeConfig(c Config) error {
 	var b strings.Builder
 	b.WriteString("# sand config\n")
+	defaults := configDefaults()
 	for _, f := range configFields(&c) {
 		if doc := configDoc[f.Key]; doc != "" {
 			fmt.Fprintf(&b, "# %s: %s\n", f.Key, doc)
@@ -284,7 +298,7 @@ func writeConfig(c Config) error {
 		// The default is named here rather than written as the value, so an empty key
 		// still tells the reader what it will do and a later change to the default
 		// still reaches this machine.
-		if d := configDefault[f.Key]; d != "" {
+		if d := defaults[f.Key]; d != "" {
 			fmt.Fprintf(&b, "# Unset means %s.\n", d)
 		}
 		v := *f.ptr
