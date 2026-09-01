@@ -96,6 +96,15 @@ Finer grained, if you want the steps apart:
     sand sign [branch]            # sign what is not signed yet, offer to push, realign the box
     sand comments push            # post the drafted replies
 
+And the one thing that goes the other way for a different reason:
+
+    sand shot                     # crop the screen, send it to the box, path on the clipboard
+    sand shot ~/Desktop/red.png   # send that file instead of capturing
+
+The screen is on the Mac and the agent that needs to see it is not. `shot` runs the cmd-shift-4
+selection, puts the image in `<remote_dir>/shots/` on the box and copies that path, so it pastes
+straight into a prompt there. Cancelling the selection sends nothing.
+
 Signing shows the branch diffstat before it asks, and refuses any commit whose author or
 committer is not your git identity: your signature would be vouching for someone else's work.
 `--allow-other-authors` overrides that, and `--yes` deliberately does not.

@@ -167,6 +167,14 @@ the check's name, the diff and the link, or say plainly that you cannot without 
 A file whose `bucket:` is not `fail` is a check that went green between pulls. Nothing to do,
 and its notes were kept only so you can see what was already tried.
 
+## Screenshots
+
+`sand shot` on the Mac grabs the screen and drops the image in `~/.sand/shots/` here, then puts
+that path on the Mac's clipboard. So a path like `~/.sand/shots/ss-2026-09-01-142530481.png`
+pasted into a prompt is a real file on this box: read it. Nothing pulls or expires them, and
+they are outside every PR directory, so a shot is context for whatever is being asked, not part
+of a thread.
+
 ## This file
 
 It lives at `~/.agents/skills/sand.md`, written there by `sand skill install` out of the `sand`

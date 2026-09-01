@@ -55,7 +55,35 @@ func root() *cobra.Command {
 	}
 	c.PersistentFlags().StringVar(&flagHost, "host", "", "sandbox ssh alias or user@host (overrides config)")
 	c.PersistentFlags().StringVar(&flagRemoteDir, "remote-dir", "", "base dir on the sandbox (overrides config)")
-	c.AddCommand(ciCmd(), commentsCmd(), configCmd(), newCmd(), signCmd(), skillCmd(), statusCmd(), upCmd())
+	c.AddCommand(ciCmd(), commentsCmd(), configCmd(), newCmd(), shotCmd(), signCmd(), skillCmd(),
+		statusCmd(), upCmd())
+	return c
+}
+
+func shotCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:     "shot [file]",
+		Aliases: []string{"screenshot"},
+		Short:   "Grab a screenshot and put it on the sandbox",
+		Long: "Runs the interactive crop (screencapture -i, the cmd-shift-4 selection), sends the\n" +
+			"image to <remote-dir>/" + shotDir + "/ on the box and copies that path to the clipboard,\n" +
+			"so it can be pasted straight into a prompt for an agent running there.\n\n" +
+			"With a file argument it sends that file instead of capturing, which is also how it\n" +
+			"works anywhere there is no screen to grab.",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := Resolve(flagHost, flagRemoteDir)
+			if err != nil {
+				return err
+			}
+			file := ""
+			if len(args) > 0 {
+				file = args[0]
+			}
+			return Shot(cfg, file, flagDryRun, cmd.OutOrStdout())
+		},
+	}
+	c.Flags().BoolVar(&flagDryRun, "dry-run", false, "say what would be sent, send nothing")
 	return c
 }
 
