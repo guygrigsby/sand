@@ -301,6 +301,62 @@ func TestSignPushesToTheBoxPastALocalPrePushHook(t *testing.T) {
 	}
 }
 
+// A branch can reach signing with every commit signed and the remote still behind it: `git
+// rebase` on a Mac with commit.gpgsign signs what it replays, so recovering from a duplicated
+// lineage hands signing five already-signed commits. `--push` then printed "nothing to sign" and
+// pushed nothing, and aperture's branch sat five commits behind GitHub until it was pushed by
+// hand. The signed push from this machine is the one step of the ring nothing else can do.
+func TestSignPushesWhatWasSignedButNeverPushed(t *testing.T) {
+	dir, remote := signRepo(t)
+	box := boxRepo(t, dir, "feature")
+
+	var out strings.Builder
+	first := signOpts(&out, "n\n") // signs, declines the push, so nothing leaves this machine
+	first.Box = box
+	if _, err := Sign(first); err != nil {
+		t.Fatalf("first round: %v\n%s", err, out.String())
+	}
+	signed := mustRun(t, dir, "git", "rev-parse", "feature")
+	if got := mustRun(t, dir, "git", "--git-dir", remote, "branch", "--list", "feature"); got != "" {
+		t.Fatalf("the remote has the branch already, so this proves nothing: %q", got)
+	}
+	// The operator hands the box the signed branch, which is where the aperture round got to.
+	mustRun(t, dir, "git", "push", "--quiet", "--force", box, "feature")
+
+	out.Reset()
+	o := signOpts(&out, "")
+	o.Push, o.Box = true, box
+	res, err := Sign(o)
+	if err != nil {
+		t.Fatalf("second round: %v\n%s", err, out.String())
+	}
+	if res.Rewritten != 0 {
+		t.Errorf("re-signed %d commit(s) that were already signed", res.Rewritten)
+	}
+	if !res.Pushed {
+		t.Fatalf("--push signed nothing and pushed nothing, leaving the remote behind\n%s", out.String())
+	}
+	if got := mustRun(t, dir, "git", "--git-dir", remote, "rev-parse", "feature"); got != signed {
+		t.Errorf("remote is at %s, want %s\n%s", short(got), short(signed), out.String())
+	}
+	if !res.BoxAligned {
+		t.Errorf("BoxAligned false with the box already on the signed head\n%s", out.String())
+	}
+
+	// And a third round has nothing left to do anywhere, rather than pushing again every time.
+	out.Reset()
+	res, err = Sign(o)
+	if err != nil {
+		t.Fatalf("third round: %v\n%s", err, out.String())
+	}
+	if res.Pushed {
+		t.Errorf("pushed a remote that was already at the branch head\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "nothing to push") {
+		t.Errorf("output did not say the remote was up to date:\n%s", out.String())
+	}
+}
+
 // The box is where the code is written. If it committed while signing ran, those commits are
 // only there, and a force push to realign would be the tool destroying the work it exists to
 // carry. It stops instead, and says how to put the new commits on top.

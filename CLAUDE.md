@@ -168,8 +168,9 @@ step verified before the next runs and printed so a watching human can check it:
    its own warning line: it is the one outcome here that breaks the *next* round rather than this
    one, so it must not be left in the signing output for someone to notice.
 2. `push` `--force-with-lease`, then re-read the remote ref to prove it moved. Signing pushes
-   what it rewrote itself, so this step only has work when there was nothing to sign: a branch
-   signed in an earlier round, or by hand, that never reached the remote.
+   what it rewrote and a fully-signed branch the remote is behind, so on most runs this step
+   reads "already at" and is the proof rather than the push. It still has work when something
+   declined the push at step 1, or when the remote holds commits the branch does not.
 3. `verify` that GitHub reports every commit of the PR as verified. A failure here is almost
    always the signing key missing from the GitHub account, so the error says that.
 4. `replies`: `comments push`.
@@ -195,6 +196,15 @@ offers to push with `--force-with-lease` and, once that push is on the remote, p
 history on the box. Flags: `--remote` (origin), `--base` (main), `--yes`, `--push`, `--dry-run`,
 `--allow-other-authors`.
 
+- **Nothing to sign is not nothing to do.** A branch can arrive here fully signed with the remote
+  still behind it: `git rebase` on a Mac with `commit.gpgsign` signs what it replays, so the
+  recovery from a duplicated lineage produces signed commits before signing ever sees them.
+  Returning at "nothing to sign" left aperture's branch five commits behind GitHub with `--push`
+  on the command line, and it was pushed by hand, which is the one step of the ring that has to
+  be a signed push from this machine. Both endings go through `publish`, which pushes when the
+  remote is behind, realigns the box either way, and pushes nothing when the remote is already at
+  this head or holds commits the branch does not: a lease would let that second case rewind the
+  remote, and a remote ahead of a fully-signed branch is something this run cannot account for.
 - **The box gets the rewrite, from this command, right after the remote does.** Not a separate
   step someone remembers, because the cost of forgetting is not visible until the round after
   next (see the ring, above). `alignBox` runs only after the push to GitHub returned, so the box

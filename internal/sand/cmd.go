@@ -143,8 +143,8 @@ func runUp(cmd *cobra.Command, args []string) error {
 		Box:               boxURL,
 		BoxHost:           boxHost,
 		BoxDir:            boxDir,
-		// sign pushes what it rewrote itself; step 2 covers the branch that needed no
-		// rewrite at all and was never pushed.
+		// sign pushes what it rewrote, and a fully-signed branch the remote is behind; step 2
+		// is what proves the remote agrees, and pushes only if something declined to.
 		Push:   !flagDryRun,
 		DryRun: flagDryRun,
 		In:     cmd.InOrStdin(),

@@ -175,7 +175,7 @@ func Sign(o SignOpts) (SignResult, error) {
 	fmt.Fprintf(o.Out, "Comparison base: %s (%s)\n", base, baseShort)
 	if len(dirty) == 0 {
 		fmt.Fprintf(o.Out, "All %d commit(s) unique to %s are signed already; nothing to sign.\n", count, branch)
-		return res, nil
+		return res, publish(g, o, answers, &res, branch, imported, head)
 	}
 	fmt.Fprintf(o.Out, "About to sign %d of %d commit(s) unique to %s\n", len(dirty), count, branch)
 	if len(clean) > 0 {
@@ -298,6 +298,42 @@ func Sign(o SignOpts) (SignResult, error) {
 	}
 	fmt.Fprintf(o.Out, "\nRecovery branch retained as: %s\n", backup)
 
+	return res, publish(g, o, answers, &res, branch, imported, head)
+}
+
+// publish is the tail of a run: offer the push to the remote, and once it lands, put the same
+// history on the box.
+//
+// Both endings reach it, the rewrite and the no-op, and that is the point. A branch can arrive
+// here with every commit signed and the remote still behind it: `git rebase` on a Mac with
+// commit.gpgsign signs what it replays, so the recovery from a duplicated lineage produces
+// signed commits before signing ever sees them. Returning at "nothing to sign" left the remote
+// five commits behind with `--push` on the command line, and the operator pushed by hand, which
+// is the one step in this loop that has to be a signed push from this machine.
+//
+// Nothing is pushed when the remote already holds this head, and nothing is pushed when the
+// remote holds commits this branch does not: a lease would let that rewind, and a remote ahead
+// of a fully-signed branch means something happened that this run cannot account for.
+func publish(g gitCmd, o SignOpts, answers *bufio.Reader, res *SignResult, branch, imported, head string) error {
+	ref := o.Remote + "/" + branch
+	if g.refExists(ref) {
+		switch remoteHead, err := g.capture("rev-parse", ref); {
+		case err != nil:
+			return err
+		case remoteHead == head:
+			// Still realigned, and the invariant holds: the box is only moved to a history the
+			// remote has, and here the remote has it already.
+			fmt.Fprintf(o.Out, "%s is already at %s; nothing to push.\n", ref, short(head))
+			res.BoxAligned = alignBox(g, o, branch, imported, head)
+			return nil
+		case exec.Command("git", "merge-base", "--is-ancestor", remoteHead, head).Run() != nil:
+			fmt.Fprintf(o.Out, "\n%s is at %s, which is not an ancestor of %s: it holds commit(s) this\n"+
+				"branch does not, so nothing was pushed. What they are:\n  git log --oneline %s --not %s\n",
+				ref, short(remoteHead), short(head), ref, branch)
+			return nil
+		}
+	}
+
 	push := o.Push
 	if !push {
 		push = confirm(answers, o.Out, fmt.Sprintf("Push %s to %s with --force-with-lease?", branch, o.Remote))
@@ -308,14 +344,14 @@ func Sign(o SignOpts) (SignResult, error) {
 			fmt.Fprintf(o.Out, "  git push --no-verify --force-with-lease %s %s   # and the box, or it keeps building on %s\n",
 				o.Box, branch, short(imported))
 		}
-		return res, nil
+		return nil
 	}
 	if err := g.run("push", "--force-with-lease", o.Remote, branch); err != nil {
-		return res, err
+		return err
 	}
 	res.Pushed = true
 	res.BoxAligned = alignBox(g, o, branch, imported, head)
-	return res, nil
+	return nil
 }
 
 // onBox answers whether the box has this branch, and false when there is no box configured or

@@ -838,7 +838,9 @@ func TestUpPushesABranchThatNeededNoSigning(t *testing.T) {
 	if pushed != local {
 		t.Errorf("origin/topic at %q, local topic at %s\n%s", pushed, local, printed)
 	}
-	for _, want := range []string{"signed already", "origin/topic → " + short(local), "(was absent)"} {
+	// Step 1 pushes it, having nothing to sign but a remote behind the branch, so step 2 is the
+	// proof that the ref matches rather than the thing that moved it.
+	for _, want := range []string{"signed already", "origin/topic is already at " + short(local)} {
 		if !strings.Contains(printed, want) {
 			t.Errorf("output missing %q:\n%s", want, printed)
 		}
