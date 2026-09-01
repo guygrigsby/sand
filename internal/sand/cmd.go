@@ -55,7 +55,7 @@ func root() *cobra.Command {
 	}
 	c.PersistentFlags().StringVar(&flagHost, "host", "", "sandbox ssh alias or user@host (overrides config)")
 	c.PersistentFlags().StringVar(&flagRemoteDir, "remote-dir", "", "base dir on the sandbox (overrides config)")
-	c.AddCommand(ciCmd(), commentsCmd(), configCmd(), newCmd(), signCmd(), skillCmd(), upCmd())
+	c.AddCommand(ciCmd(), commentsCmd(), configCmd(), newCmd(), signCmd(), skillCmd(), statusCmd(), upCmd())
 	return c
 }
 
@@ -287,6 +287,59 @@ func signCmd() *cobra.Command {
 	c.Flags().BoolVar(&flagPush, "push", false, "push with --force-with-lease once verified, without asking")
 	c.Flags().BoolVar(&flagDryRun, "dry-run", false, "show what would be signed, rewrite nothing and push nothing")
 	return c
+}
+
+func statusCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "status [pr-number|pr-url]",
+		Short: "Where the work is, on all three machines, and what to run next",
+		Long: "Reads this Mac, the box and GitHub at once and prints one `next:` line.\n\n" +
+			"Changes nothing anywhere. It does fetch: from the remote, so every count is\n" +
+			"measured against current refs, and from the box into FETCH_HEAD, because\n" +
+			"whether its commits are copies of pushed ones is a question about trees.\n\n" +
+			"A branch with no open PR is fine; the GitHub half is simply skipped.",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, target, hasPR, err := setupStatus(args)
+			if err != nil {
+				return err
+			}
+			return Status(StatusOpts{
+				Cfg: cfg, Target: target, HasPR: hasPR,
+				Remote: flagRemote, Base: flagBase,
+				Box: boxRepoURL(), RepoDir: flagRepoDir,
+				Out: cmd.OutOrStdout(),
+			})
+		},
+	}
+	c.Flags().StringVar(&flagPR, "pr", "", "PR number or URL (default: the PR for the current branch)")
+	c.Flags().StringVar(&flagRemote, "remote", "origin", "remote to measure against")
+	c.Flags().StringVar(&flagBase, "base", "main", "base branch on that remote")
+	c.Flags().StringVar(&flagRepoDir, "repo-dir", "", "the repo checkout on the box (default ~/projects/<repo>)")
+	return c
+}
+
+// setupStatus is setup for a command that must survive there being no PR. Every other command
+// here acts on one and can insist; status is the one you run to find out what state you are in,
+// including "the branch exists and nothing has been opened for it yet".
+func setupStatus(args []string) (Config, Target, bool, error) {
+	cfg, err := Resolve(flagHost, flagRemoteDir)
+	if err != nil {
+		return cfg, Target{}, false, err
+	}
+	arg, err := prArg(args)
+	if err != nil {
+		return cfg, Target{}, false, err
+	}
+	if arg != "" {
+		target, err := ResolveTarget(arg)
+		if err != nil {
+			return cfg, Target{}, false, err
+		}
+		return cfg, target, true, target.LoadURL()
+	}
+	target, found, err := currentBranchPR()
+	return cfg, target, found, err
 }
 
 func skillCmd() *cobra.Command {

@@ -98,8 +98,48 @@ thing to hardcode for every machine.
 ## Commands
 
 `sand` is where the Mac-side scripts for this workflow are being consolidated, so each one is a
-subcommand rather than a shell file: `new`, `comments` (below), `ci` (below), `up` (`push` is an
-alias), `sign`, `skill`, `config` (`init`, `get`, `set`).
+subcommand rather than a shell file: `new`, `status`, `comments` (below), `ci` (below), `up`
+(`push` is an alias), `sign`, `skill`, `config` (`init`, `get`, `set`).
+
+## Where the work is: `sand status [pr]`
+
+One read-only pass over all three machines, ending in one `next:` line. It decides nothing and
+moves nothing.
+
+The reason it exists is the ring's own failure mode: the box building on a lineage signing
+already replaced is invisible in either machine's `git log`, because the two copies differ only
+by hash. Before this, the first thing that said so was a rejected push three commands later, or
+`sand sign` refusing after the operator had already committed to a round. `status` asks the same
+question with nothing at stake.
+
+- **The lineage check needs the box's commits, so it fetches them.** Whether a commit is a copy
+  of a pushed one is a question about trees, and a hash on its own cannot answer it. `git fetch
+  <box> <branch>` writes FETCH_HEAD and nothing else, so no ref this checkout sits on moves. It
+  is the same `duplicatedOnRemote` the signing refusal uses, asked from the other side: two
+  implementations of "is this commit already on the remote" would eventually disagree, and the
+  one in `sand sign` is a hard stop.
+- **One `git fetch <remote>` first, before the three groups.** Every count is measured against
+  the remote-tracking refs, and two git fetches in one repository fight over the same lock for
+  nothing. The three groups after it are three independent round trips and run at once. A failed
+  fetch is a warning line, not a stop: a status that will not print because the network is down
+  is a status nobody can use.
+- **The box's counts come from the real parsers, not from grep over ssh.** `fetchDir` pulls the
+  PR directory back (`ci/` rides along, being a subdirectory of it) and `loadThreadFiles` /
+  `loadCIFiles` read it. A second implementation of "is this reply pending" is a second answer
+  to it.
+- **"New on GitHub" is decided by re-rendering, not by counting.** For each unresolved thread,
+  merge the box's copy forward and render it the way `pull` would; different bytes mean a
+  comment arrived since the pull. Comparing counts would miss a reply added to a thread that
+  already has a file, which is the common case in a review loop.
+- **The dirty count on the box excludes untracked files.** What blocks the realigning push at
+  the end of signing is a modified tracked file. Counting a stray build artifact as a reason to
+  stop would be a false alarm on every run.
+- **A branch with no open PR is a normal thing to ask about**, unlike every other command here,
+  so `status` uses `currentBranchPR` and skips the GitHub half rather than failing.
+- **The `next:` order is the design.** The two states that stop everything (a duplicated
+  lineage, an agent holding the lock) come before the work that is ready to publish, which comes
+  before the work to bring over. Everything below the line it prints is still true and is what
+  the next run will say; a list of five suggestions is what this command exists not to be.
 
 ## Starting an issue: `sand new <issue-number>`
 

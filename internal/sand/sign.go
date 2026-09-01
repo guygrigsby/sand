@@ -409,39 +409,23 @@ func alignBox(g gitCmd, o SignOpts, branch, imported, head string) bool {
 // originals. Nothing said so until the two refused to merge.
 func checkPreSigningLineage(g gitCmd, dirty []string, remote, base, branch, head, box string) error {
 	remoteBranch, remoteBase := remote+"/"+branch, remote+"/"+base
-	pushed := map[string][]string{}
-	on := map[string]string{} // identity -> the ref its twin sits on, branch losing to base
-	for _, ref := range []string{remoteBranch, remoteBase} {
-		if !g.refExists(ref) {
-			continue
-		}
-		ids, err := g.identities(ref)
-		if err != nil {
-			return err
-		}
-		for id, shas := range ids {
-			pushed[id], on[id] = shas, ref // base second, so a twin on both reads as merged
-		}
+	twins, err := duplicatedOnRemote(g, dirty, remoteBranch, remoteBase)
+	if err != nil {
+		return err
+	}
+	if len(twins) == 0 {
+		return nil
 	}
 
 	// dirty is oldest first, so the last commit with a twin is the boundary: everything above
 	// it is the work that exists only here, and is what has to be replayed.
 	var dups []string
 	boundary, merged := "", false
-	for _, sha := range dirty {
-		id, err := g.identity(sha)
-		if err != nil {
-			return err
-		}
-		if twins := pushed[id]; len(twins) > 0 {
-			dups = append(dups, fmt.Sprintf("  %s is an unsigned copy of %s on %s: %q",
-				short(sha), short(twins[0]), on[id], identitySubject(id)))
-			boundary = sha
-			merged = merged || on[id] == remoteBase
-		}
-	}
-	if len(dups) == 0 {
-		return nil
+	for _, d := range twins {
+		dups = append(dups, fmt.Sprintf("  %s is an unsigned copy of %s on %s: %q",
+			short(d.SHA), short(d.Twin), d.On, d.Subject))
+		boundary = d.SHA
+		merged = merged || d.On == remoteBase
 	}
 
 	// A commit whose twin is on the base is already merged, so it has to go rather than move:
@@ -467,6 +451,51 @@ func checkPreSigningLineage(g gitCmd, dirty []string, remote, base, branch, head
 		"here on the Mac, then give the box the result before signing again: aif resets this checkout to\n"+
 		"the box's branch, so a rebase the box has not been told about is undone by the next run.\n%s",
 		len(dups), where, strings.Join(dups, "\n"), fix)
+}
+
+// dupCommit is one commit whose twin is already on the remote: same tree, same subject, a
+// different hash because one of the two carries a signature.
+type dupCommit struct {
+	SHA     string
+	Twin    string
+	On      string // the ref the twin sits on
+	Subject string
+}
+
+// duplicatedOnRemote finds, for each of commits, a twin already pushed. Two callers ask it in
+// opposite directions and it has to be one implementation: signing refuses to add a second copy
+// of work that is already there, and status reports the same state before anyone runs signing.
+//
+// The base is checked second so a commit with a twin on both refs is reported against the base,
+// which is the worse of the two: a twin on a branch goes away when the branch is replaced, a
+// twin on the base is merged and permanent.
+func duplicatedOnRemote(g gitCmd, commits []string, remoteBranch, remoteBase string) ([]dupCommit, error) {
+	pushed := map[string][]string{}
+	on := map[string]string{} // identity -> the ref its twin sits on
+	for _, ref := range []string{remoteBranch, remoteBase} {
+		if !g.refExists(ref) {
+			continue
+		}
+		ids, err := g.identities(ref)
+		if err != nil {
+			return nil, err
+		}
+		for id, shas := range ids {
+			pushed[id], on[id] = shas, ref
+		}
+	}
+
+	var dups []dupCommit
+	for _, sha := range commits {
+		id, err := g.identity(sha)
+		if err != nil {
+			return nil, err
+		}
+		if twins := pushed[id]; len(twins) > 0 {
+			dups = append(dups, dupCommit{SHA: sha, Twin: twins[0], On: on[id], Subject: identitySubject(id)})
+		}
+	}
+	return dups, nil
 }
 
 // commitIdentity is what a signing rewrite preserves and a hash does not: the tree and the

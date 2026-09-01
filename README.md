@@ -85,6 +85,7 @@ This writes `issue.md` under `<remote_dir>/<owner>/<repo>/issue-1532/` and creat
 
 Everything else defaults the PR to the one for the current branch. A number or a PR URL overrides.
 
+    sand status                   # where the work is, on all three machines, and what to run next
     sand comments pull            # threads to the box, agent starts, output streams back
     sand comments pull --no-agent # just write the files
     sand ci pull                  # the PR's failing checks and their logs, same trip
@@ -116,6 +117,14 @@ leaves it alone.
 With no PR for the current `guy/<issue>-...` branch, `up` reads the box-authored
 `issue-<n>/pr-description.md` after signing and pushing, opens the PR, then verifies it. Missing
 or empty prose is a stop rather than a generated body.
+
+`sand status` is the one to run when you do not know which of those you want. It reads this Mac,
+the box and GitHub at once and prints one `next:` line: the branch and unsigned count here, the
+box's branch, dirty count and whether an agent holds the lock there, how many replies are drafted
+and how many checks have notes, and what GitHub says is unresolved, failing or unverified. It
+changes nothing anywhere. It does fetch, from the remote and from the box, because the thing it
+is really looking for is commits on the box that are unsigned copies of commits already pushed,
+and that is a question about trees rather than hashes. A branch with no PR is fine.
 
 `comments pull` is safe to re-run. Replies already drafted on the box survive, and a thread
 already posted stays `status: sent` and is not posted twice.
