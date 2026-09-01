@@ -152,15 +152,13 @@ func macStatus(g gitCmd, o StatusOpts) macState {
 	return s
 }
 
-// boxProbe is one remote line, printing key=value. Untracked files are left out of the dirty
-// count on purpose: what blocks the realigning push at the end of signing is a modified tracked
-// file, and counting a stray build artifact as a reason to stop would be a false alarm every
-// time. flock takes the lock only to drop it, which is how to ask whether an agent holds it
-// without waiting for one.
+// boxProbe is one remote line, printing key=value. The dirty count is boxDirty, shared with the
+// pre-flight in signing. flock takes the lock only to drop it, which is how to ask whether an
+// agent holds it without waiting for one.
 const boxProbe = `cd %s 2>/dev/null || { echo checkout=missing; exit 0; }
 echo "branch=$(git symbolic-ref --quiet --short HEAD || echo '(detached)')"
 echo "head=$(git rev-parse --short HEAD 2>/dev/null)"
-echo "dirty=$(git status --porcelain --untracked-files=no 2>/dev/null | grep -c '')"
+` + boxDirty + `
 if command -v flock >/dev/null 2>&1 && [ -e %s ]; then
   if flock -n %s true 2>/dev/null; then echo agent=no; else echo agent=yes; fi
 else echo agent=no; fi`

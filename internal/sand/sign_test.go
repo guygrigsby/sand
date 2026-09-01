@@ -120,6 +120,100 @@ func boxRepo(t *testing.T, dir, branch string) string {
 	return box
 }
 
+// boxWorkingCheckout is the box as it really is, where boxRepo is only its refs: a non-bare
+// repository with the branch checked out, and receive.denyCurrentBranch left as `git init` leaves
+// it. That combination is what rejects the realigning push, so it is what the pre-flight has to be
+// tested against.
+func boxWorkingCheckout(t *testing.T, dir, branch string) string {
+	t.Helper()
+	box := filepath.Join(t.TempDir(), "box")
+	mustRun(t, dir, "git", "init", "--quiet", "--initial-branch=unborn", box)
+	mustRun(t, dir, "git", "push", "--quiet", box, branch)
+	mustRun(t, box, "git", "switch", "--quiet", branch)
+	return box
+}
+
+// sshShim is the e2e stand-in for ssh on its own: it drops the host and runs the command here, so
+// the questions signing asks the box are exercised without a second machine.
+func sshShim(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "ssh-shim")
+	if err := os.WriteFile(p, []byte(fakeSSH), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// The failure this repo actually shipped, in aperture rather than here. `git init` leaves
+// receive.denyCurrentBranch unset, git defaults it to refuse, and the box has the branch checked
+// out, so every realigning push was rejected. alignBox runs after the push to the remote, so by
+// then GitHub already had the signed history and the box was on the lineage it replaced: the next
+// round refused to sign, and the round after that too. The precondition is one ssh call away, so
+// signing settles it before it rewrites anything.
+func TestSignMakesTheBoxAbleToTakeTheRewrite(t *testing.T) {
+	dir, _ := signRepo(t)
+	box := boxWorkingCheckout(t, dir, "feature")
+	t.Setenv("SAND_SSH", sshShim(t))
+
+	var out strings.Builder
+	o := signOpts(&out, "")
+	o.Push, o.Box = true, box
+	o.BoxHost, o.BoxDir = "box", box
+	res, err := Sign(o)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+
+	signed := mustRun(t, dir, "git", "rev-parse", "feature")
+	if !res.BoxAligned {
+		t.Fatalf("the box did not take the rewrite\n%s", out.String())
+	}
+	if got := mustRun(t, box, "git", "rev-parse", "HEAD"); got != signed {
+		t.Errorf("box is at %s, want the signed %s\n%s", short(got), short(signed), out.String())
+	}
+	if got := mustRun(t, box, "git", "config", "receive.denyCurrentBranch"); got != "updateInstead" {
+		t.Errorf("receive.denyCurrentBranch on the box is %q, so the next push is refused too", got)
+	}
+	// updateInstead rather than ignore: the box's working tree has to follow the ref, or the
+	// agent there edits files from a history that is gone.
+	if err := exec.Command("git", "-C", box, "diff", "--quiet").Run(); err != nil {
+		t.Error("the box's working tree does not match the branch it now holds")
+	}
+}
+
+// A modified tracked file on the box refuses the realigning push, so the round cannot finish, so
+// it does not start. What becomes of the box's uncommitted work is not this machine's call, and
+// signing anyway is what leaves GitHub and the box on different lineages.
+func TestSignRefusesADirtyBox(t *testing.T) {
+	dir, _ := signRepo(t)
+	box := boxWorkingCheckout(t, dir, "feature")
+	t.Setenv("SAND_SSH", sshShim(t))
+	if err := os.WriteFile(filepath.Join(box, "a.txt"), []byte("still being worked on\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	unsigned := mustRun(t, dir, "git", "rev-parse", "feature")
+
+	var out strings.Builder
+	o := signOpts(&out, "")
+	o.Push, o.Box = true, box
+	o.BoxHost, o.BoxDir = "box", box
+	if _, err := Sign(o); err == nil {
+		t.Fatalf("signed with a box that cannot take the result\n%s", out.String())
+	} else {
+		for _, want := range []string{"1 uncommitted", "Commit or stash"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error does not mention %q: %v", want, err)
+			}
+		}
+	}
+	if after := mustRun(t, dir, "git", "rev-parse", "feature"); after != unsigned {
+		t.Errorf("history moved anyway: %s → %s", short(unsigned), short(after))
+	}
+	if got := mustRun(t, dir, "git", "branch", "--list", "feature-before-signing-*"); got != "" {
+		t.Errorf("the refusal left a recovery branch:\n%s", got)
+	}
+}
+
 // Signing rewrites every commit it touches, so the box is left holding a chain that exists
 // nowhere else. Until this ran, the box then committed on top of it and the next round arrived
 // with unsigned copies of commits already signed and pushed: two lineages, same trees,

@@ -133,13 +133,16 @@ func runUp(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Println("\n1/4 sign")
+	boxURL, boxHost, boxDir := thisRepoOnBox()
 	res, err := Sign(SignOpts{
 		Branch:            branch,
 		Remote:            flagRemote,
 		Base:              flagBase,
 		Yes:               flagYes,
 		AllowOtherAuthors: flagOtherAuth,
-		Box:               boxRepoURL(),
+		Box:               boxURL,
+		BoxHost:           boxHost,
+		BoxDir:            boxDir,
 		// sign pushes what it rewrote itself; step 2 covers the branch that needed no
 		// rewrite at all and was never pushed.
 		Push:   !flagDryRun,
@@ -261,6 +264,7 @@ func signCmd() *cobra.Command {
 			"develop, trunk or release/*.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			boxURL, boxHost, boxDir := thisRepoOnBox()
 			o := SignOpts{
 				Remote:            flagRemote,
 				Base:              flagBase,
@@ -270,7 +274,9 @@ func signCmd() *cobra.Command {
 				In:                cmd.InOrStdin(),
 				Out:               cmd.OutOrStdout(),
 				AllowOtherAuthors: flagOtherAuth,
-				Box:               boxRepoURL(),
+				Box:               boxURL,
+				BoxHost:           boxHost,
+				BoxDir:            boxDir,
 			}
 			if len(args) > 0 {
 				o.Branch = args[0]
@@ -304,10 +310,11 @@ func statusCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			boxURL, _, _ := thisRepoOnBox()
 			return Status(StatusOpts{
 				Cfg: cfg, Target: target, HasPR: hasPR,
 				Remote: flagRemote, Base: flagBase,
-				Box: boxRepoURL(), RepoDir: flagRepoDir,
+				Box: boxURL, RepoDir: flagRepoDir,
 				Out: cmd.OutOrStdout(),
 			})
 		},
@@ -850,24 +857,27 @@ func setup(args []string) (Config, Target, error) {
 
 func warn(msg string) { fmt.Fprintln(os.Stderr, "sand: warning:", msg) }
 
-// boxRepoURL is the box's checkout of this repo as a git URL, which is where signing has to put
-// the history it rewrote. The box keeps every repo at ~/projects/<repo> (checkoutDir), and a
-// push URL of host:projects/<repo> is relative to the login home, so it lands in the same place.
+// thisRepoOnBox is the box's checkout of this repo, twice over: as the git URL signing pushes the
+// history it rewrote to, and as the ssh host and path the pre-flight asks questions over. Both,
+// because a push URL cannot carry a question and splitting one back apart guesses at where the
+// host ends. The box keeps every repo at ~/projects/<repo> (checkoutDir), and both forms are
+// relative to the login home, so they land in the same place.
 //
 // The repo name comes from this checkout's directory rather than from `gh`: signing is the one
 // command in here that needs nothing from GitHub, and asking it for a name this machine already
-// knows would make a missing token break history rewriting. Empty when there is no configured
-// host or this is not a checkout, which alignBox reports rather than guessing at a box.
-func boxRepoURL() string {
+// knows would make a missing token break history rewriting. All three are empty when there is no
+// configured host or this is not a checkout, which alignBox reports rather than guessing at a box.
+func thisRepoOnBox() (url, host, dir string) {
 	cfg, err := Resolve(flagHost, flagRemoteDir)
 	if err != nil {
-		return ""
+		return "", "", ""
 	}
 	top, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
 	if err != nil {
-		return ""
+		return "", "", ""
 	}
-	return cfg.Host + ":projects/" + segment(filepath.Base(strings.TrimSpace(string(top))))
+	dir = "projects/" + segment(filepath.Base(strings.TrimSpace(string(top))))
+	return cfg.Host + ":" + dir, cfg.Host, dir
 }
 
 // agentRun is the agent both pulls start: same box, same checkout, same lock, only the prompt

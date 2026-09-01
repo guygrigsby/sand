@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -49,6 +50,11 @@ type SignOpts struct {
 	// rewrite is put back there once it is on the remote: see alignBox. Empty skips that,
 	// which is a machine with no box configured, not a normal run.
 	Box string
+
+	// BoxHost and BoxDir address that same checkout over ssh rather than as a push URL,
+	// because checkBoxCanReceive has to ask it questions and a push URL cannot carry one.
+	// Empty skips the pre-flight.
+	BoxHost, BoxDir string
 
 	// AllowOtherAuthors signs commits whose author or committer is not this machine's git
 	// identity. Off by default: see checkSigningIdentity.
@@ -194,6 +200,11 @@ func Sign(o SignOpts) (SignResult, error) {
 		if err := checkSigningIdentity(g, commits, dirty); err != nil {
 			return res, err
 		}
+	}
+	// Before the lineage check, not after it: the recovery that check prints ends in a push to
+	// the box, so a box that cannot receive one makes that advice useless too.
+	if err := checkBoxCanReceive(o); err != nil {
+		return res, err
 	}
 	if err := checkPreSigningLineage(g, dirty, o.Remote, o.Base, branch, head, o.Box); err != nil {
 		return res, err
@@ -385,6 +396,90 @@ func alignBox(g gitCmd, o SignOpts, branch, imported, head string) bool {
 	}
 	fmt.Fprintf(o.Out, "  %s %s → %s\n", o.Box, branch, short(head))
 	return true
+}
+
+// boxReceiveProbe asks the two questions that decide whether the push at the end of signing can
+// land: what receive.denyCurrentBranch is set to there, and whether a tracked file is modified.
+// `git config <key>` exits non-zero for a key that is not set, which is the common answer and the
+// one that matters, hence the `|| echo unset`.
+const boxReceiveProbe = `cd %s 2>/dev/null || { echo checkout=missing; exit 0; }
+echo "deny=$(git config receive.denyCurrentBranch 2>/dev/null || echo unset)"
+` + boxDirty
+
+// checkBoxCanReceive makes the box able to take the rewrite before the rewrite exists.
+//
+// alignBox has to run after the push to the remote, because the box must never be moved to a
+// history the remote rejected, so a box that cannot receive that push is discovered when the
+// signed history is already on GitHub. That is exactly the two-lineage state all of this exists
+// to stay out of, and both things that stop the push are one ssh call away, so they are answered
+// here instead.
+//
+// receive.denyCurrentBranch is set rather than reported. git defaults it to "refuse", so a
+// checkout nobody configured rejects every push into the branch it has out, and "warn" or
+// "ignore" take the push while leaving the working tree behind, which is worse. Aperture's
+// checkout was never set: every align push since alignBox existed failed with a hint at the tail
+// of a long run, and every following round refused to sign. The setting is there only so this
+// tool's own push can land, it is not source, and that push already rewrites the box's working
+// tree, which is a great deal more than a line in its config. A setup command the operator has to
+// remember is the step that gets skipped.
+//
+// A modified tracked file is a refusal, not a fix. updateInstead declines the push rather than
+// overwrite it, and what becomes of the box's uncommitted work is not this machine's call. It is
+// the same stop `sand status` already prints.
+//
+// An unreachable box or a missing checkout is neither. Neither says anything about whether the
+// branch should be signed, and alignBox reports both after the push with nothing lost.
+func checkBoxCanReceive(o SignOpts) error {
+	if o.BoxHost == "" || o.BoxDir == "" {
+		return nil
+	}
+	where := o.BoxHost + ":" + o.BoxDir
+	out, err := exec.Command(sshBin(), o.BoxHost, fmt.Sprintf(boxReceiveProbe, remoteQuote(o.BoxDir))).Output()
+	if err != nil {
+		fmt.Fprintf(o.Out, "\nCould not ask %s whether it can take the rewrite: %v\n", where, err)
+		return nil
+	}
+
+	deny, dirty := "", 0
+	for _, line := range strings.Split(string(out), "\n") {
+		k, v, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if !ok {
+			continue
+		}
+		switch k {
+		case "checkout":
+			fmt.Fprintf(o.Out, "\nNo checkout at %s, so the rewrite has nowhere to go back to.\n", where)
+			return nil
+		case "deny":
+			deny = v
+		case "dirty":
+			dirty, _ = strconv.Atoi(v)
+		}
+	}
+
+	if dirty > 0 {
+		return fmt.Errorf("refusing to sign: %s has %d uncommitted tracked file(s), so the signed branch "+
+			"cannot be handed back to it and the next round would arrive with unsigned copies of commits "+
+			"already pushed. Commit or stash them there first:\n  ssh %s 'cd %s && git status --short'",
+			where, dirty, o.BoxHost, o.BoxDir)
+	}
+	if deny == "updateInstead" {
+		return nil
+	}
+	fix := fmt.Sprintf("ssh %s 'cd %s && git config receive.denyCurrentBranch updateInstead'", o.BoxHost, o.BoxDir)
+	if o.DryRun {
+		fmt.Fprintf(o.Out, "\ndry run: receive.denyCurrentBranch is %q on %s, which refuses the push that "+
+			"hands the signed branch back; a real run sets it to updateInstead\n", deny, where)
+		return nil
+	}
+	set := fmt.Sprintf("cd %s && git config receive.denyCurrentBranch updateInstead", remoteQuote(o.BoxDir))
+	if err := exec.Command(sshBin(), o.BoxHost, set).Run(); err != nil {
+		return fmt.Errorf("%s has receive.denyCurrentBranch=%s, which refuses the push that hands the signed "+
+			"branch back, and setting it here failed: %w\n  %s", where, deny, err, fix)
+	}
+	fmt.Fprintf(o.Out, "\nSet receive.denyCurrentBranch=updateInstead on %s (was %q), without which the push "+
+		"at the end of signing is refused and the box keeps building on the replaced lineage.\n", where, deny)
+	return nil
 }
 
 // checkPreSigningLineage refuses to sign a commit whose signed twin is already on the pushed

@@ -50,6 +50,12 @@ Without it git refuses a push into the branch that is checked out. With it, the 
 working tree too, and it refuses when that tree is dirty, which is the behaviour worth having: it
 cannot land on top of work the box has not committed.
 
+**`sand sign` sets it, and nobody has to remember it.** It used to be a manual step, and the cost
+of skipping it was invisible for a whole round: aperture's checkout never had it, so every
+realigning push since `alignBox` existed was rejected, said so in one line at the tail of a long
+signing run, and left GitHub holding signed history the box had never seen. Sixteen commits and
+three refused rounds later that is what it cost. See `checkBoxCanReceive`.
+
 The repo is [guygrigsby/sand](https://github.com/guygrigsby/sand), private, default branch
 `main`. The box needs a read-only credential for it to pull, and no more than that: no `gh`, no
 API token, no push. So the box's work still reaches the Mac directly rather than through GitHub:
@@ -200,6 +206,19 @@ history on the box. Flags: `--remote` (origin), `--base` (main), `--yes`, `--pus
   tool exists to carry: it stops, says so, and prints the `git fetch` + `git rebase --onto` that
   puts them back on top. `SignResult.BoxAligned` carries the outcome, which is what lets `up`
   say "GitHub has it, the box does not" in a line of its own instead of burying it.
+- **The box is made able to receive the rewrite before the rewrite exists.** `alignBox` has to
+  run after the push to the remote, so the two things that stop it were both discovered when
+  GitHub already held the signed history, which is the two-lineage state itself.
+  `checkBoxCanReceive` asks the box the same two questions in one ssh call, before the rewrite,
+  and answers them differently on purpose. `receive.denyCurrentBranch` is set: git defaults it to
+  `refuse`, `warn` and `ignore` take the push and leave the working tree behind, and the setting
+  exists only so this tool's own push can land, which makes it sand's business and not the box's
+  source. A modified tracked file is refused instead, because what becomes of the box's
+  uncommitted work is not this machine's call, and it is the stop `sand status` already prints. An
+  unreachable box or a missing checkout is neither: neither says anything about whether the branch
+  should be signed, and `alignBox` reports both after the push with nothing lost. It runs before
+  the lineage check because the recovery that check prints ends in a push to the box, so a box
+  that cannot take one makes that advice useless too.
 - **A branch built on the replaced lineage is refused, before anything is rewritten.**
   `checkPreSigningLineage` keys every commit about to be signed by tree plus subject and looks
   for the same key on `<remote>/<branch>`. A hit says this commit's signed twin is already

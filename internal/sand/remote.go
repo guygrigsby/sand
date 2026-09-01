@@ -23,6 +23,13 @@ func sshBin() string {
 	return "ssh"
 }
 
+// boxDirty is the probe line that answers whether a push can land in the box's checkout:
+// tracked files with uncommitted changes, which is what receive.denyCurrentBranch=updateInstead
+// refuses rather than overwrite. Untracked files are left out on purpose, a stray build artifact
+// is not a reason to stop a round. Both probes share the line because `status` saying the round
+// cannot finish and `sign` refusing to start one have to be the same answer.
+const boxDirty = `echo "dirty=$(git status --porcelain --untracked-files=no 2>/dev/null | grep -c '')"`
+
 // RemotePath is where a PR's files live on the box: <base>/<owner>/<repo>/pr-<n>.
 func (t Target) RemotePath(base string) string {
 	return path.Join(base, segment(t.Owner), segment(t.Repo), fmt.Sprintf("pr-%d", t.Number))

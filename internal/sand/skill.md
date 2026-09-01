@@ -25,8 +25,12 @@ hash. It pushes that history straight back into this checkout, updating the work
 branch you are on can change hash between one round and the next without you doing anything. Two
 things follow, and both are on you:
 
-- **Commit before you stop.** The Mac's push refuses to land while this tree is dirty, which
-  blocks the whole round. Uncommitted work at handoff is the one way to cause that.
+- **Commit before you stop.** The Mac's push refuses to land while this tree is dirty, so `sand
+  sign` now checks this checkout before it rewrites anything and refuses the whole round when a
+  tracked file is modified here. Uncommitted work at handoff is the one way to cause that, and it
+  stops the round with a named file rather than halfway through. Untracked files do not count, so
+  a build artifact is not a problem. Nothing else about receiving the push is yours to arrange:
+  `receive.denyCurrentBranch` is set from the Mac when it is missing.
 - **Never try to fix a hash mismatch by hand.** No rebase, no amend, no reset onto an older
   commit, and no branch built on what the branch used to be. Copies of commits that are already
   signed and on the remote are the failure this arrow exists to prevent, and the Mac refuses to
