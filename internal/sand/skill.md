@@ -183,6 +183,9 @@ either is pointless, the next install overwrites it. The text ships with the too
 when the tool changes, so if it disagrees with how `sand` actually behaves, the binary is newer
 than the install: re-run `sand skill install`.
 
+`sand skill install` prints the version it wrote the file from, and `sand --version` says what
+this box has. That is the check when the two disagree.
+
 ## Multiple PRs
 
 One directory per PR, so `~/.sand/*/*/pr-*/index.md` is the list of what has been pulled.
