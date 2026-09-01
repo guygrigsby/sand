@@ -173,6 +173,38 @@ func TestSignWillNotOverwriteABoxThatMovedOn(t *testing.T) {
 	}
 }
 
+// The worse half of the same disease, and the one this repo actually grew: the duplicate is on
+// the base, so it is merged and permanent rather than something replacing the branch undoes.
+// Signing would put a third copy of the work on the remote and the two would refuse to merge.
+func TestSignRefusesWorkAlreadyMergedIntoTheBase(t *testing.T) {
+	dir, _ := signRepo(t)
+	old := mustRun(t, dir, "git", "rev-parse", "main")
+
+	// The same change committed twice off the same point: one copy merged to main by an
+	// earlier round, one still on a branch. The empty commit only forces a different parent,
+	// so the two dup commits differ in hash and agree on tree and subject, which is exactly
+	// what a signing rewrite leaves behind.
+	mustRun(t, dir, "git", "switch", "--quiet", "-c", "merged", old)
+	mustRun(t, dir, "git", "commit", "--quiet", "--allow-empty", "-m", "main: unrelated")
+	commit(t, dir, "dup.txt", "dup\n", "the duplicated one")
+	mustRun(t, dir, "git", "push", "--quiet", "origin", "merged:main")
+	mustRun(t, dir, "git", "switch", "--quiet", "-c", "dup", old)
+	commit(t, dir, "dup.txt", "dup\n", "the duplicated one")
+
+	var out strings.Builder
+	o := signOpts(&out, "")
+	o.Push = true
+	_, err := Sign(o)
+	if err == nil {
+		t.Fatalf("signed work that is already on origin/main\n%s", out.String())
+	}
+	for _, want := range []string{"origin/main", "the duplicated one", "git rebase origin/main dup"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not mention %q: %v", want, err)
+		}
+	}
+}
+
 // The tripwire for the runs that get past the realignment: a branch built on the lineage the
 // last round replaced. Signing it would push a second copy of work that is already on the
 // remote, so it stops before making a recovery branch, and names the pairs.

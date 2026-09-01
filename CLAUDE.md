@@ -168,6 +168,14 @@ history on the box. Flags: `--remote` (origin), `--base` (main), `--yes`, `--pus
   box realigned by hand, a `--no-push` round, a branch someone rebased). It refuses by name and
   pair, before the recovery branch is made and before any push. Not a warning: the operator
   cannot see this from either machine's `git log`.
+- **It checks `<remote>/<base>` as well as `<remote>/<branch>`, and the base is the worse of the
+  two.** A twin on the branch stops existing when the branch is replaced. A twin on `main` is
+  merged: permanent, already signed, and nothing can take it back. This repo grew seven such
+  pairs, identical trees, both copies signed, one set on `main` and one on the branch, from two
+  rounds signing the same box originals; nothing said a word until the two refused to merge and
+  `git` called it a divergence of 7 against 13. So a duplicate of merged work is refused with a
+  different fix: `git rebase <remote>/<base> <branch>`, which drops what is already upstream by
+  patch id, rather than the replay that only moves it.
 - **The recovery it prints runs on the Mac and ends with a push to the box**, in that order, and
   the order is not a style choice. `aif` resets this checkout to the box's branch at the top of
   every run, so a rebase done here and not pushed to the box is undone by the next `sand sign`

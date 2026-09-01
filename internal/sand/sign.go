@@ -186,7 +186,7 @@ func Sign(o SignOpts) (SignResult, error) {
 			return res, err
 		}
 	}
-	if err := checkPreSigningLineage(g, dirty, o.Remote, branch, head, o.Box); err != nil {
+	if err := checkPreSigningLineage(g, dirty, o.Remote, o.Base, branch, head, o.Box); err != nil {
 		return res, err
 	}
 	if o.DryRun {
@@ -381,20 +381,33 @@ func alignBox(g gitCmd, o SignOpts, branch, imported, head string) bool {
 // this checkout to the box's branch at the top of every run: a rebase done here and not pushed
 // to the box is undone by the next `sand sign` before it reads anything. Only the Mac can do the
 // rebase at all, since only the Mac can see <remote>/<branch>.
-func checkPreSigningLineage(g gitCmd, dirty []string, remote, branch, head, box string) error {
-	remoteBranch := remote + "/" + branch
-	if !g.refExists(remoteBranch) {
-		return nil
-	}
-	pushed, err := g.identities(remoteBranch)
-	if err != nil {
-		return err
+//
+// <remote>/<base> is checked as well as <remote>/<branch>, and it is the worse of the two. A twin
+// on the branch is undone by replacing the branch; a twin on main is merged, permanent, and
+// already carries whatever signature it was given. This repo grew seven such pairs, same trees,
+// both copies signed, one set on main and one on the branch, from two rounds signing the same box
+// originals. Nothing said so until the two refused to merge.
+func checkPreSigningLineage(g gitCmd, dirty []string, remote, base, branch, head, box string) error {
+	remoteBranch, remoteBase := remote+"/"+branch, remote+"/"+base
+	pushed := map[string][]string{}
+	on := map[string]string{} // identity -> the ref its twin sits on, branch losing to base
+	for _, ref := range []string{remoteBranch, remoteBase} {
+		if !g.refExists(ref) {
+			continue
+		}
+		ids, err := g.identities(ref)
+		if err != nil {
+			return err
+		}
+		for id, shas := range ids {
+			pushed[id], on[id] = shas, ref // base second, so a twin on both reads as merged
+		}
 	}
 
 	// dirty is oldest first, so the last commit with a twin is the boundary: everything above
 	// it is the work that exists only here, and is what has to be replayed.
 	var dups []string
-	boundary := ""
+	boundary, merged := "", false
 	for _, sha := range dirty {
 		id, err := g.identity(sha)
 		if err != nil {
@@ -402,27 +415,38 @@ func checkPreSigningLineage(g gitCmd, dirty []string, remote, branch, head, box 
 		}
 		if twins := pushed[id]; len(twins) > 0 {
 			dups = append(dups, fmt.Sprintf("  %s is an unsigned copy of %s on %s: %q",
-				short(sha), short(twins[0]), remoteBranch, identitySubject(id)))
+				short(sha), short(twins[0]), on[id], identitySubject(id)))
 			boundary = sha
+			merged = merged || on[id] == remoteBase
 		}
 	}
 	if len(dups) == 0 {
 		return nil
 	}
 
+	// A commit whose twin is on the base is already merged, so it has to go rather than move:
+	// rebasing onto the base drops it, since git skips what is upstream by patch id.
 	fix := fmt.Sprintf("  git rebase --onto %s %s %s", remoteBranch, short(boundary), branch)
+	if merged {
+		fix = fmt.Sprintf("  git rebase %s %s   # drops the ones already merged", remoteBase, branch)
+	}
 	if box != "" {
 		// Leased against the head this run imported, which is the box's, so a box that has
 		// moved since rejects the push instead of losing the commits that moved it.
 		fix += fmt.Sprintf("\n  git push --force-with-lease=refs/heads/%s:%s %s %s\n"+
 			"  sand sign --push", branch, head, box, branch)
 	}
+	where := remoteBranch
+	if merged {
+		where = remoteBase + " or " + remoteBranch
+	}
 	return fmt.Errorf("refusing to sign: %d commit(s) are unsigned copies of commits already on %s.\n%s\n"+
-		"This branch was built on the lineage the last signing round replaced, so signing it would push a\n"+
-		"second copy of work that is already there. Replay what is only here on top of the pushed branch,\n"+
+		"This branch was built on a lineage an earlier signing round replaced, so signing it would put a\n"+
+		"second copy of work that is already there on the remote. A twin on a branch goes away when the\n"+
+		"branch is replaced; a twin on the base is merged and permanent. Drop or replay what is duplicated,\n"+
 		"here on the Mac, then give the box the result before signing again: aif resets this checkout to\n"+
 		"the box's branch, so a rebase the box has not been told about is undone by the next run.\n%s",
-		len(dups), remoteBranch, strings.Join(dups, "\n"), fix)
+		len(dups), where, strings.Join(dups, "\n"), fix)
 }
 
 // commitIdentity is what a signing rewrite preserves and a hash does not: the tree and the
