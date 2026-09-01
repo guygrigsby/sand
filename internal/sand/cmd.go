@@ -49,6 +49,7 @@ func root() *cobra.Command {
 		Long: "sand runs on the Mac and ferries work to and from the sandbox.\n\n" +
 			"`sand new` starts an issue on the box. `sand comments pull` puts PR review\n" +
 			"threads there for an agent, and `sand up` signs and publishes its work.",
+		Version: Version(),
 		// Execute prints the error itself, prefixed; cobra printing it too says it twice.
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -415,7 +416,9 @@ func runSkillInstall() error {
 		if got.Updated {
 			state = "written"
 		}
-		fmt.Println(got.Path, "("+state+")")
+		// The version, because the skill is text out of one particular binary: when the box
+		// side and the tool disagree, this line is what says which `sand` wrote the file.
+		fmt.Printf("%s (%s, from sand %s)\n", got.Path, state, Version())
 	}
 	for _, l := range got.Links {
 		fmt.Println(l, "->", got.Path)

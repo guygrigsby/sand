@@ -1,4 +1,4 @@
-module sand
+module github.com/guygrigsby/sand
 
 go 1.26
 
