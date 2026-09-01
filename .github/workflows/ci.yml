@@ -1,0 +1,19 @@
+# The gate, on every push and PR. It calls `make check` rather than restating go vet, gofmt,
+# the tests and the two builds: the Makefile is the one definition of what checking means, and
+# a second copy here is a second copy that drifts.
+name: check
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          # go.mod says which Go, so nothing here has to.
+          go-version-file: go.mod
+      - run: make check

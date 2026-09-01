@@ -17,7 +17,7 @@ for a one-line change. This file is the index and the rules that hold whatever y
 | [docs/ci.md](docs/ci.md) | `sand ci pull`, and why there is no `ci push`. |
 | [docs/config.md](docs/config.md) | the config keys, precedence, and how `config init` / `set` render the file. |
 | [docs/box-skill.md](docs/box-skill.md) | `internal/sand/skill.md`, the harness table, and `sand skill install`. |
-| [docs/development.md](docs/development.md) | `make check`, and how the tests fake `gh` and the box. |
+| [docs/development.md](docs/development.md) | `make check`, how the tests fake `gh` and the box, and how a release is cut. |
 
 `README.md` is the coworker-facing version: what to install, what to run, what it refuses to do.
 Keep it true when behaviour changes, but the reasons belong in `docs/`.

@@ -184,7 +184,9 @@ when the tool changes, so if it disagrees with how `sand` actually behaves, the 
 than the install: re-run `sand skill install`.
 
 `sand skill install` prints the version it wrote the file from, and `sand --version` says what
-this box has. That is the check when the two disagree.
+this box has. That is the check when the two disagree. The binary here comes from a release
+(`curl -fsSL https://raw.githubusercontent.com/guygrigsby/sand/main/install.sh | bash`, which
+installs the skill too), so upgrading is that one command and needs no checkout of `sand`.
 
 ## Multiple PRs
 
