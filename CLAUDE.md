@@ -219,6 +219,17 @@ history on the box. Flags: `--remote` (origin), `--base` (main), `--yes`, `--pus
   should be signed, and `alignBox` reports both after the push with nothing lost. It runs before
   the lineage check because the recovery that check prints ends in a push to the box, so a box
   that cannot take one makes that advice useless too.
+- **Every push to the box is `--no-verify`; the push to the remote is not.** A Mac that signs has
+  a `pre-push` hook refusing commits it cannot verify a signature on, and git runs a hook per
+  push, not per remote. That is the right gate for GitHub and wrong for the box twice over: on
+  the recovery path the branch handed over is unsigned by construction, that being the point of
+  handing it over, and the range the hook measures is the whole history, because there is no
+  remote-tracking ref for the box to bound it against. In aperture it counted 53 commits from
+  before that repo signed anything, none of them the branch's, and blocked the push. Nothing
+  reaches GitHub unchecked as a result: the box has no credential that can push there, and the
+  one push that does go to GitHub keeps the hook. This was the second reason no realigning push
+  had ever landed for aperture, independent of `receive.denyCurrentBranch`, and it also made the
+  printed recovery unrunnable, which is why that line carries the flag too.
 - **A branch built on the replaced lineage is refused, before anything is rewritten.**
   `checkPreSigningLineage` keys every commit about to be signed by tree plus subject and looks
   for the same key on `<remote>/<branch>`. A hit says this commit's signed twin is already

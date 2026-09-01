@@ -305,7 +305,7 @@ func Sign(o SignOpts) (SignResult, error) {
 	if !push {
 		fmt.Fprintf(o.Out, "Not pushed. When ready:\n  git push --force-with-lease %s %s\n", o.Remote, branch)
 		if o.Box != "" {
-			fmt.Fprintf(o.Out, "  git push --force-with-lease %s %s   # and the box, or it keeps building on %s\n",
+			fmt.Fprintf(o.Out, "  git push --no-verify --force-with-lease %s %s   # and the box, or it keeps building on %s\n",
 				o.Box, branch, short(imported))
 		}
 		return res, nil
@@ -385,7 +385,15 @@ func alignBox(g gitCmd, o SignOpts, branch, imported, head string) bool {
 		}
 	}
 
-	args := append([]string{"push"}, lease...)
+	// --no-verify, and only here. A Mac doing this job has a pre-push hook refusing commits it
+	// cannot verify a signature on, which is exactly right for the push to GitHub and wrong for
+	// this one twice over: the branch reaching the box is unsigned by construction on the recovery
+	// path, and the range the hook measures is the whole history, since there is no
+	// remote-tracking ref for the box to bound it. In aperture that came to 53 commits from
+	// before the repo signed anything, none of them this branch's, and it blocked the push that
+	// keeps the two machines on one lineage. The box cannot push to GitHub, so nothing reaches
+	// GitHub unchecked by skipping it; the push above, which does, keeps the hook.
+	args := append([]string{"push", "--no-verify"}, lease...)
 	if err := g.run(append(args, o.Box, branch)...); err != nil {
 		fmt.Fprintf(o.Out, "  push to %s failed: %v\n", o.Box, err)
 		fmt.Fprintf(o.Out, "  denyCurrentBranch in that message: run once on the box,\n"+
@@ -532,7 +540,10 @@ func checkPreSigningLineage(g gitCmd, dirty []string, remote, base, branch, head
 	if box != "" {
 		// Leased against the head this run imported, which is the box's, so a box that has
 		// moved since rejects the push instead of losing the commits that moved it.
-		fix += fmt.Sprintf("\n  git push --force-with-lease=refs/heads/%s:%s %s %s\n"+
+		// --no-verify for the reason alignBox gives: the branch this hands the box is unsigned,
+		// which is the whole point of handing it over, and a signature hook here stops the
+		// recovery from being runnable at all.
+		fix += fmt.Sprintf("\n  git push --no-verify --force-with-lease=refs/heads/%s:%s %s %s\n"+
 			"  sand sign --push", branch, head, box, branch)
 	}
 	where := remoteBranch

@@ -256,6 +256,51 @@ func TestSignPutsTheRewriteBackOnTheBox(t *testing.T) {
 	}
 }
 
+// The second reason no realigning push had ever landed for aperture, independent of the box's
+// receive config: a pre-push hook in the Mac's checkout, refusing every commit it cannot verify a
+// signature on, on every remote. It fires for the box too, where the range is the whole history
+// (there is no remote-tracking ref to bound it), so it counted 53 commits from before this repo
+// signed anything and blocked the push. The hook is right about GitHub and has no business on this
+// one, so the box's push skips it and the remote's does not.
+func TestSignPushesToTheBoxPastALocalPrePushHook(t *testing.T) {
+	dir, remote := signRepo(t)
+	box := boxRepo(t, dir, "feature")
+	log := filepath.Join(t.TempDir(), "pre-push.log")
+	hook := "#!/bin/sh\necho \"$2\" >> " + log + "\n" +
+		"case \"$2\" in *box.git*) echo 'pre-push: UNVERIFIED commit, refusing' 1>&2; exit 1;; esac\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(dir, ".git", "hooks", "pre-push"), []byte(hook), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var out strings.Builder
+	o := signOpts(&out, "")
+	o.Push, o.Box = true, box
+	res, err := Sign(o)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+
+	signed := mustRun(t, dir, "git", "rev-parse", "feature")
+	if !res.BoxAligned {
+		t.Fatalf("the hook blocked the realigning push\n%s", out.String())
+	}
+	if got := mustRun(t, dir, "git", "--git-dir", box, "rev-parse", "feature"); got != signed {
+		t.Errorf("box is at %s, want the signed %s\n%s", short(got), short(signed), out.String())
+	}
+
+	// The gate that matters is still a gate: the hook ran for the remote and not for the box.
+	ran, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(ran), remote) {
+		t.Errorf("the hook did not run for %s, so signing is skipping it everywhere:\n%s", remote, ran)
+	}
+	if strings.Contains(string(ran), box) {
+		t.Errorf("the hook ran for the box:\n%s", ran)
+	}
+}
+
 // The box is where the code is written. If it committed while signing ran, those commits are
 // only there, and a force push to realign would be the tool destroying the work it exists to
 // carry. It stops instead, and says how to put the new commits on top.
