@@ -29,13 +29,7 @@ On the Mac:
   post replies quoting them.
 - ssh to the box, by whatever alias you give `sand config init`
 
-On the box: a checkout of each repo under `~/projects/<repo>`, with
-
-    git config receive.denyCurrentBranch updateInstead
-
-set in it, so the Mac can hand the signed branch back after signing rewrote it. Git otherwise
-refuses a push into the checked-out branch; with this it updates the working tree too, and
-refuses while that tree is dirty, so it cannot land on top of uncommitted work. Also an agent
+On the box: a checkout of each repo under `~/projects/<repo>`, and an agent
 CLI (`claude` or `pi`) with the box-side skill installed, findable over ssh. `ssh box '<cmd>'` gets none of an
 interactive shell's PATH, so a harness that only `.zshrc` puts on PATH is not there when `pull`
 looks for it; `~/.local/bin`, `~/bin` and `~/go/bin` are added for you, `~/.zshenv` covers the
@@ -80,8 +74,12 @@ Start an issue from the Mac:
     sand new 1532                 # fetch issue, create its box data dir and switch both checkouts
 
 This writes `issue.md` under `<remote_dir>/<owner>/<repo>/issue-1532/` and creates
-`guy/1532-<issue-title>` from `origin/main` on the Mac and box. The box agent writes
+`<you>/1532-<issue-title>` from `origin/main` on the Mac and box. The box agent writes
 `pr-description.md` beside the issue before handoff.
+
+The `<you>` is `branch_prefix`, your `$USER` unless you set it. It is the name `sand up` reads
+the issue number back out of when there is no PR yet, so a branch made by hand wants the same
+shape: `sand config set branch_prefix <yours>` if `$USER` is not what you branch under.
 
 Everything else defaults the PR to the one for the current branch. A number or a PR URL overrides.
 
@@ -95,7 +93,7 @@ Everything else defaults the PR to the one for the current branch. A number or a
 
 Finer grained, if you want the steps apart:
 
-    sand sign [branch]            # sign what is not signed yet, offer to push
+    sand sign [branch]            # sign what is not signed yet, offer to push, realign the box
     sand comments push            # post the drafted replies
 
 Signing shows the branch diffstat before it asks, and refuses any commit whose author or
@@ -104,7 +102,15 @@ committer is not your git identity: your signature would be vouching for someone
 
 Signing then pushes the result to the box, after GitHub has taken it. It leases against the head
 it just read there, and stops rather than force pushing when the box has commits of its own since
-the import, printing the `git rebase --onto` that puts them on top. A branch that was built on a
+the import, printing the `git rebase --onto` that puts them on top. Two things about that push
+are handled for you rather than left as setup. `receive.denyCurrentBranch=updateInstead` is set
+in the box's checkout, because git otherwise refuses a push into the branch that is checked out;
+with it the working tree updates too, and the push is refused while that tree is dirty, which is
+the behaviour worth having. And it goes with `--no-verify`, because a Mac that signs has a
+pre-push hook refusing commits it cannot verify, which is right for the push to GitHub and wrong
+for this one: the branch it hands the box on the recovery path is unsigned by design, and the
+range such a hook measures against a URL with no tracking ref is the whole history. Nothing
+reaches GitHub unchecked either way, since the box has no credential that can push there. A branch that was built on a
 lineage an earlier signing round replaced is refused outright, before anything is rewritten: its
 commits are unsigned copies of commits already on the remote, and pushing a second copy is how
 the two histories drift apart unnoticed.
@@ -114,7 +120,7 @@ another PR of the same repo, or a `ci pull` for the same one, refuses to start a
 the first is working, rather than let two edit one tree. `--no-agent` writes the files and
 leaves it alone.
 
-With no PR for the current `guy/<issue>-...` branch, `up` reads the box-authored
+With no PR for the current `<you>/<issue>-...` branch, `up` reads the box-authored
 `issue-<n>/pr-description.md` after signing and pushing, opens the PR, then verifies it. Missing
 or empty prose is a stop rather than a generated body.
 
@@ -154,6 +160,7 @@ which beats the defaults.
 | `remote_dir` | `~/.sand` | base dir on the box for the thread files |
 | `harness` | `claude` | agent CLI `pull` starts on the box: `claude` or `pi` |
 | `model` | the harness's own | model to pass it, in that harness's spelling |
+| `branch_prefix` | `$USER` | what `sand new` puts before `<issue>-<title>` |
 
 `host` has no default because it names one machine on one tailnet. If the tailnet refuses your
 Mac's local username, put the login user in the Mac's `~/.ssh/config` or in the host itself:

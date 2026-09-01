@@ -149,7 +149,7 @@ question with nothing at stake.
 
 ## Starting an issue: `sand new <issue-number>`
 
-`new` asks `gh` for the issue, derives `guy/<number>-<lowercase-title>`, fetches the configured
+`new` asks `gh` for the issue, derives `<branch_prefix>/<number>-<lowercase-title>`, fetches the configured
 base and creates that branch in both the Mac checkout and `~/projects/<repo>` on the box. Both
 checkouts must be clean and the branch must not exist. It writes the issue title, URL and body to
 `<remote_dir>/<owner>/<repo>/issue-<n>/issue.md`; that directory is the durable handoff for
@@ -157,6 +157,15 @@ brainstorming and later holds `pr-description.md`.
 
 The Mac branch exists so `sand up` has an unambiguous current issue before `aif` imports the
 box commits. Creating a ref is bookkeeping, not source editing.
+
+- **The prefix is config, and its default is `$USER`.** It was `guy/`, written into both
+  `issueBranch` and `issueNumberFromBranch`, which is the one thing in here that could not
+  work for a second person: their `sand new` named a branch after somebody else, and then
+  their `sand up` could not find the issue number in a branch they had named themselves.
+  `branch_prefix` defaults to `$USER` rather than being asked for like `host`, because unlike a
+  tailnet alias the machine already knows the answer, and an empty prefix is still a working
+  branch name (`<issue>-<title>`) rather than a stop. One implementation reads and writes it
+  (`branchPrefix`), so the name `new` creates is by construction the name `up` parses.
 
 ## The whole Mac side: `sand up [pr]`
 
@@ -175,7 +184,7 @@ step verified before the next runs and printed so a watching human can check it:
    always the signing key missing from the GitHub account, so the error says that.
 4. `replies`: `comments push`.
 
-If the current branch has no open PR, its name must be `guy/<issue>-...`. After steps 1 and 2,
+If the current branch has no open PR, its name must be `<branch_prefix>/<issue>-...`. After steps 1 and 2,
 `up` reads `issue-<n>/pr-description.md` from the box and opens the PR with the issue title. It
 then runs the same GitHub signature verification. A missing description stops the run. `push`
 is an alias for `up` so both entry points have the same ordering and checks.
@@ -381,8 +390,8 @@ remotes can change the answer.
 
 `host` is the one setting with no default and the one thing a new Mac has to be told: it names
 one machine on one tailnet, so a compiled-in alias is either someone else's box or a name that
-resolves nowhere. `remote_dir` defaults to `~/.sand`, `harness` to `claude` and `model` to
-nothing at all. Set them in `~/.config/sand/config.yaml`, or with `--host` / `--remote-dir`, or
+resolves nowhere. `remote_dir` defaults to `~/.sand`, `harness` to `claude`, `branch_prefix` to
+`$USER` and `model` to nothing at all. Set them in `~/.config/sand/config.yaml`, or with `--host` / `--remote-dir`, or
 `SAND_<KEY>` in the environment, in that order of precedence. `harness` is which agent CLI
 `pull` starts (from the one harness table) and `model` is what to pass it, in that harness's own
 spelling. An empty model is a real answer: the harness picks, which is the only answer that does

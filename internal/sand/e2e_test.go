@@ -149,6 +149,9 @@ func harness(t *testing.T) (remoteBase, ghLog string) {
 	t.Setenv("GH_CREATED", filepath.Join(dir, "pr-created"))
 	t.Setenv("GH_PR_BODY", filepath.Join(dir, "pr-body"))
 	t.Setenv("HOME", dir) // keep any real ~/.config/sand out of it
+	// Pinned, because it now defaults to $USER: a test that names a branch must not depend on
+	// who is running it. A test about the prefix itself sets its own after this.
+	t.Setenv("SAND_BRANCH_PREFIX", "guy")
 
 	flagHost = "box"
 	flagRemoteDir = remoteBase
@@ -188,12 +191,15 @@ func TestNewCreatesIssueWorkspaceAndBranch(t *testing.T) {
 	mustRun(t, filepath.Dir(boxRepo), "git", "clone", "--quiet", remote, boxRepo)
 	flagBase = "main"
 	t.Cleanup(func() { flagBase = "" })
+	// The prefix is whoever is running this, not whoever wrote it. It was `guy/`, compiled in,
+	// so every coworker's `sand new` opened a branch in someone else's name.
+	t.Setenv("SAND_BRANCH_PREFIX", "kim")
 
 	if err := runNew([]string{"42"}); err != nil {
 		t.Fatalf("new: %v", err)
 	}
 
-	branch := "guy/42-fix-the-thing-safely"
+	branch := "kim/42-fix-the-thing-safely"
 	if got := mustRun(t, dir, "git", "branch", "--show-current"); got != branch {
 		t.Errorf("Mac branch %q, want %q", got, branch)
 	}

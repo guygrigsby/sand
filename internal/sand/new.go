@@ -17,21 +17,41 @@ func (t Target) issuePath(base string) string {
 	return path.Join(base, segment(t.Owner), segment(t.Repo), fmt.Sprintf("issue-%d", t.Number))
 }
 
-func issueBranch(number int, title string) string {
+// issueBranch is the one branch name sand both writes and reads: `new` creates it, and `up`
+// takes the issue number back out of it when there is no PR yet. The prefix is config
+// (branch_prefix, defaulting to $USER) rather than the `guy/` it was compiled with, because a
+// compiled-in one names a coworker's branch after somebody else, and then their own `sand up`
+// cannot find the issue in a branch they named themselves.
+func issueBranch(prefix string, number int, title string) string {
 	slug := strings.Trim(branchWord.ReplaceAllString(strings.ToLower(title), "-"), "-")
 	if slug == "" {
 		slug = "issue"
 	}
-	return fmt.Sprintf("guy/%d-%s", number, slug)
+	return fmt.Sprintf("%s%d-%s", branchPrefix(prefix), number, slug)
 }
 
-func issueNumberFromBranch(branch string) (int, bool) {
-	n, rest, ok := strings.Cut(strings.TrimPrefix(branch, "guy/"), "-")
-	if !ok || rest == "" || !strings.HasPrefix(branch, "guy/") {
+func issueNumberFromBranch(prefix, branch string) (int, bool) {
+	rest, ok := strings.CutPrefix(branch, branchPrefix(prefix))
+	if !ok {
+		return 0, false
+	}
+	n, title, ok := strings.Cut(rest, "-")
+	if !ok || title == "" {
 		return 0, false
 	}
 	number, err := strconv.Atoi(n)
 	return number, err == nil && number > 0
+}
+
+// branchPrefix is the prefix as it appears in a branch name: with its slash, and empty when
+// there is none, which is what an unset config on a machine with no $USER comes to. A branch
+// of plain `<issue>-<title>` is a fine answer there; inventing a name is not.
+func branchPrefix(prefix string) string {
+	prefix = strings.Trim(prefix, "/")
+	if prefix == "" {
+		return ""
+	}
+	return prefix + "/"
 }
 
 func runNew(args []string) error {
@@ -47,7 +67,7 @@ func runNew(args []string) error {
 	if err != nil {
 		return err
 	}
-	branch := issueBranch(number, issue.Title)
+	branch := issueBranch(cfg.BranchPrefix, number, issue.Title)
 	target := Target{Owner: issue.Owner, Repo: issue.Repo, Number: number}
 	remotePath := target.issuePath(cfg.RemoteDir)
 
@@ -124,9 +144,11 @@ func setupUp(args []string) (Config, Target, bool, error) {
 	}
 
 	branch := target.Branch
-	number, ok := issueNumberFromBranch(branch)
+	number, ok := issueNumberFromBranch(cfg.BranchPrefix, branch)
 	if !ok {
-		return cfg, Target{}, false, fmt.Errorf("no open PR for branch %q in %s and its name does not identify an issue", branch, target.Slug())
+		return cfg, Target{}, false, fmt.Errorf("no open PR for branch %q in %s and its name does not identify an issue "+
+			"(want %s<issue>-<title>; `sand config set branch_prefix <yours>` if that prefix is not yours)",
+			branch, target.Slug(), branchPrefix(cfg.BranchPrefix))
 	}
 	issue, issueErr := fetchIssue(number)
 	if issueErr != nil {

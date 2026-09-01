@@ -1,6 +1,6 @@
 ---
 name: sand
-description: Work GitHub issues, PR review comments and failing CI checks on the sandbox box, where sand puts issue context, review threads and CI failures under ~/.sand/<owner>/<repo>/. Use when asked to brainstorm or implement the issue named by the current guy/<issue>-... branch, address review feedback, reply to reviewer comments, work through a pulled PR review, or fix the failing checks pulled to pr-<n>/ci/.
+description: Work GitHub issues, PR review comments and failing CI checks on the sandbox box, where sand puts issue context, review threads and CI failures under ~/.sand/<owner>/<repo>/. Use when asked to brainstorm or implement the issue named by the current <user>/<issue>-... branch, address review feedback, reply to reviewer comments, work through a pulled PR review, or fix the failing checks pulled to pr-<n>/ci/.
 ---
 
 # Working GitHub issues and PR reviews on the box
@@ -39,8 +39,9 @@ things follow, and both are on you:
 ## New issues
 
 `sand new <issue-number>` puts the issue at `~/.sand/<owner>/<repo>/issue-<n>/issue.md` and
-checks out `guy/<n>-<title>` in this repo. Read `issue.md` before brainstorming or changing
-code. Before handing work back, write a concise PR body to `pr-description.md` beside it. Lead
+checks out `<prefix>/<n>-<title>` in this repo, the prefix being whoever runs sand on the Mac
+(`branch_prefix`, their `$USER` unless they set it). Read `issue.md` before brainstorming or
+changing code. Before handing work back, write a concise PR body to `pr-description.md` beside it. Lead
 with what changed, include any risk that remains and end with `Fixes: #<n>`. Do not include a
 test plan. `sand up` on the Mac refuses to open the PR without this file.
 
