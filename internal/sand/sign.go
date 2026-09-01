@@ -29,6 +29,17 @@ func aifBin() string {
 	return "aif"
 }
 
+// aifHint is where to get aif, for the one refusal a new person cannot clear by reading it: aif
+// ships in the corp repo rather than this one, and a stop with no way out is what sends somebody
+// looking for another route to move the branch. Empty for an overridden SAND_AIF, since that
+// binary is theirs and ours is not the answer.
+func aifHint(bin string) string {
+	if bin != "aif" {
+		return ""
+	}
+	return ": install it from the corp repo with `./tool/go install ./misc/aif`"
+}
+
 // protectedBranches never get rewritten, whatever the caller says.
 var protectedBranches = map[string]bool{
 	"main": true, "master": true, "develop": true, "trunk": true,
@@ -115,9 +126,12 @@ func Sign(o SignOpts) (SignResult, error) {
 	}
 
 	// A missing aif is not a reason to reach for some other way of moving the branch: the
-	// wrong branch signed with the right key is worse than a clear stop.
+	// wrong branch signed with the right key is worse than a clear stop. It is also the one
+	// requirement a new person cannot satisfy by reading the error, since aif ships in the corp
+	// repo and not here, so the stop carries the install line. Only for the real aif: an
+	// overridden SAND_AIF is somebody's own binary and telling them to install ours is noise.
 	if _, err := exec.LookPath(aifBin()); err != nil {
-		return res, fmt.Errorf("%s is required to import the branch and is not on PATH", aifBin())
+		return res, fmt.Errorf("%s is required to import the branch and is not on PATH%s", aifBin(), aifHint(aifBin()))
 	}
 
 	base := o.Remote + "/" + o.Base

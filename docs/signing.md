@@ -101,6 +101,10 @@ history on the box. Flags: `--remote` (origin), `--base` (main), `--yes`, `--pus
 - **Refusals come before the rewrite:** protected branch (`main`, `master`, `develop`, `trunk`,
   `release/*`), a rebase/merge/cherry-pick in progress, a dirty tree, a missing `aif`, a missing
   base ref, no common history. A missing `aif` is a stop, never a fallback to another sync route.
+  It is the only requirement here that ships somewhere else (the corp repo, `./tool/go install
+  ./misc/aif`), so that stop names the install line: a first-time refusal a new person cannot
+  clear by reading it is a refusal that sends them looking for another route, which is the thing
+  this stop exists to prevent. Not when `SAND_AIF` is set, since then the binary is theirs.
 - **Verification comes after it:** every branch-unique commit must carry a `gpgsig` header and the
   commit count must be unchanged, or nothing is pushed. A recovery branch
   (`<branch>-before-signing-<timestamp>`) is made before the rewrite and kept afterwards.

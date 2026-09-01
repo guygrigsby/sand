@@ -23,7 +23,8 @@ quotes a hash has to be posted after the hash it quotes is final and on the remo
 On the Mac:
 
 - Go 1.26+, `git` and `gh` (authenticated: `gh auth status`)
-- `aif`, which is what imports a box branch into the Mac checkout for `sand sign`
+- `aif`, which is what imports a box branch into the Mac checkout for `sand sign`. It lives in
+  the corp repo, not this one: `./tool/go install ./misc/aif` from a checkout of it.
 - a commit signing key configured in git, and the same key added to your GitHub account as a
   signing key. GitHub reports commits as unverified without it and `sand up` stops rather than
   post replies quoting them.

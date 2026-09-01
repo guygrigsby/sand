@@ -846,6 +846,21 @@ func TestSignRefusals(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "not on PATH") {
 			t.Fatalf("err = %v, want a stop on the missing import tool", err)
 		}
+		// Their own binary, so ours is not the answer.
+		if strings.Contains(err.Error(), "./misc/aif") {
+			t.Errorf("told them to install aif over their SAND_AIF: %v", err)
+		}
+	})
+
+	// The stop for the real aif has to say where aif comes from: it ships in the corp repo,
+	// not here, so it is the one requirement a first run cannot satisfy from the error alone.
+	t.Run("missing aif says where to get it", func(t *testing.T) {
+		if hint := aifHint("aif"); !strings.Contains(hint, "install ./misc/aif") {
+			t.Errorf("hint for the real aif was %q", hint)
+		}
+		if hint := aifHint("/opt/mine/aif-fork"); hint != "" {
+			t.Errorf("hint for an overridden aif was %q", hint)
+		}
 	})
 
 	t.Run("declining the rewrite changes nothing", func(t *testing.T) {
