@@ -178,9 +178,10 @@ func TestSignWillNotOverwriteABoxThatMovedOn(t *testing.T) {
 // remote, so it stops before making a recovery branch, and names the pairs.
 func TestSignRefusesAPreSigningLineage(t *testing.T) {
 	dir, remote := signRepo(t)
+	box := boxRepo(t, dir, "feature")
 	var out strings.Builder
 	o := signOpts(&out, "")
-	o.Push = true
+	o.Push, o.Box = true, box
 	if _, err := Sign(o); err != nil {
 		t.Fatalf("first round: %v\n%s", err, out.String())
 	}
@@ -200,7 +201,13 @@ func TestSignRefusesAPreSigningLineage(t *testing.T) {
 	if err == nil {
 		t.Fatalf("signed a pre-signing lineage\n%s", out.String())
 	}
-	for _, want := range []string{"unsigned copies", "origin/feature", "feature: a"} {
+	// The recovery has to be runnable as printed: the rebase is a Mac-side one onto the pushed
+	// branch, and it is followed by the push that tells the box, without which aif undoes it.
+	for _, want := range []string{
+		"unsigned copies", "origin/feature", "feature: a",
+		"git rebase --onto origin/feature ",
+		"--force-with-lease=refs/heads/feature:" + stale, box,
+	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error does not mention %q: %v", want, err)
 		}

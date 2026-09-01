@@ -166,8 +166,17 @@ history on the box. Flags: `--remote` (origin), `--base` (main), `--yes`, `--pus
   pushed, so signing would put a second copy of the same work on the remote. That is the state
   the realignment exists to prevent, and this is the tripwire for the runs that got past it (a
   box realigned by hand, a `--no-push` round, a branch someone rebased). It refuses by name and
-  pair, before the recovery branch is made and before any push, and points at the same
-  `rebase --onto`. Not a warning: the operator cannot see this from either machine's `git log`.
+  pair, before the recovery branch is made and before any push. Not a warning: the operator
+  cannot see this from either machine's `git log`.
+- **The recovery it prints runs on the Mac and ends with a push to the box**, in that order, and
+  the order is not a style choice. `aif` resets this checkout to the box's branch at the top of
+  every run, so a rebase done here and not pushed to the box is undone by the next `sand sign`
+  before it looks at anything. The rebase itself can only happen here: `<remote>/<branch>` is a
+  ref the box has never seen. So the three lines are `git rebase --onto <remote>/<branch>
+  <boundary> <branch>`, a leased push of the result to the box, and `sand sign --push`. The
+  boundary is computed, not left as `<old-head>`: `dirty` is oldest first, so the last commit
+  with a twin is the last one already on the remote, and everything above it is the work that
+  exists nowhere else.
 - **Only what is unsigned, and what sits on top of it.** Review is a loop, so most runs meet a
   branch that is already partly signed, and re-signing a commit moves its hash, which kills
   every reply already posted quoting it. The already-signed commits go to filter-branch as

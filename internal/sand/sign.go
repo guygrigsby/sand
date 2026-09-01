@@ -186,7 +186,7 @@ func Sign(o SignOpts) (SignResult, error) {
 			return res, err
 		}
 	}
-	if err := checkPreSigningLineage(g, dirty, o.Remote+"/"+branch, o.Box); err != nil {
+	if err := checkPreSigningLineage(g, dirty, o.Remote, branch, head, o.Box); err != nil {
 		return res, err
 	}
 	if o.DryRun {
@@ -376,7 +376,13 @@ func alignBox(g gitCmd, o SignOpts, branch, imported, head string) bool {
 // alignBox is what keeps this from happening. This is the stop for the runs that got past it:
 // a push the operator declined, a box whose tree was dirty when the realignment came, a branch
 // someone moved by hand.
-func checkPreSigningLineage(g gitCmd, dirty []string, remoteBranch, box string) error {
+//
+// The recovery it prints has to run here and end on the box, in that order, because `aif` resets
+// this checkout to the box's branch at the top of every run: a rebase done here and not pushed
+// to the box is undone by the next `sand sign` before it reads anything. Only the Mac can do the
+// rebase at all, since only the Mac can see <remote>/<branch>.
+func checkPreSigningLineage(g gitCmd, dirty []string, remote, branch, head, box string) error {
+	remoteBranch := remote + "/" + branch
 	if !g.refExists(remoteBranch) {
 		return nil
 	}
@@ -385,7 +391,10 @@ func checkPreSigningLineage(g gitCmd, dirty []string, remoteBranch, box string) 
 		return err
 	}
 
+	// dirty is oldest first, so the last commit with a twin is the boundary: everything above
+	// it is the work that exists only here, and is what has to be replayed.
 	var dups []string
+	boundary := ""
 	for _, sha := range dirty {
 		id, err := g.identity(sha)
 		if err != nil {
@@ -394,20 +403,25 @@ func checkPreSigningLineage(g gitCmd, dirty []string, remoteBranch, box string) 
 		if twins := pushed[id]; len(twins) > 0 {
 			dups = append(dups, fmt.Sprintf("  %s is an unsigned copy of %s on %s: %q",
 				short(sha), short(twins[0]), remoteBranch, identitySubject(id)))
+			boundary = sha
 		}
 	}
 	if len(dups) == 0 {
 		return nil
 	}
 
-	fix := "  git fetch <remote> <branch> && git rebase --onto FETCH_HEAD <old-head> <branch>"
+	fix := fmt.Sprintf("  git rebase --onto %s %s %s", remoteBranch, short(boundary), branch)
 	if box != "" {
-		fix = fmt.Sprintf("  on the box: git fetch %s %s && git rebase --onto FETCH_HEAD <old-head> %s",
-			box, strings.TrimPrefix(remoteBranch, "origin/"), strings.TrimPrefix(remoteBranch, "origin/"))
+		// Leased against the head this run imported, which is the box's, so a box that has
+		// moved since rejects the push instead of losing the commits that moved it.
+		fix += fmt.Sprintf("\n  git push --force-with-lease=refs/heads/%s:%s %s %s\n"+
+			"  sand sign --push", branch, head, box, branch)
 	}
 	return fmt.Errorf("refusing to sign: %d commit(s) are unsigned copies of commits already on %s.\n%s\n"+
-		"The branch was built on the lineage the last signing round replaced, so signing these would push\n"+
-		"duplicates of work that is already there. Put the new commits on top of the pushed branch first:\n%s",
+		"This branch was built on the lineage the last signing round replaced, so signing it would push a\n"+
+		"second copy of work that is already there. Replay what is only here on top of the pushed branch,\n"+
+		"here on the Mac, then give the box the result before signing again: aif resets this checkout to\n"+
+		"the box's branch, so a rebase the box has not been told about is undone by the next run.\n%s",
 		len(dups), remoteBranch, strings.Join(dups, "\n"), fix)
 }
 
