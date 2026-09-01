@@ -226,5 +226,6 @@ Two rules that are easy to miss:
 - Every change updates `internal/sand/skill.md` in the same commit, or says in the commit
   message why the box side is untouched. The skill is the only thing telling an agent on the
   box how this loop works and that agent cannot read the source of a tool it never runs.
-- `CLAUDE.md` carries the design decisions and the reasons behind them. Read it before changing
+- The design decisions and the reasons behind them live in `docs/`, one file per area, with
+  `CLAUDE.md` as the index over them. Read the file for what you are touching before changing
   behaviour, and keep it current when you do.
