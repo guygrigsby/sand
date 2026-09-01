@@ -9,7 +9,12 @@ the package and not in a `skills/` directory.
 `sand skill install` writes it to `~/.agents/skills/sand.md` and links the harnesses that are
 actually installed on that machine at that one file. The program owns this, not the Makefile:
 the binary is what carries the text, and the machine that needs the skill may have no checkout
-and no `make`.
+and no `make`. That is not hypothetical any more: a coworker's box gets its binary from
+`install.sh`, which downloads a release and, finding a harness there, runs `skill install`
+itself, so the box never sees this repo.
+
+Install prints the version it wrote from, because "the skill disagrees with the tool" is only
+diagnosable if both ends can be named. The other end is `sand --version`.
 
 | harness | present when | link | headless run |
 |---|---|---|---|

@@ -22,7 +22,7 @@ quotes a hash has to be posted after the hash it quotes is final and on the remo
 
 On the Mac:
 
-- Go 1.26+, `git` and `gh` (authenticated: `gh auth status`)
+- `git` and `gh` (authenticated: `gh auth status`)
 - `aif`, which is what imports a box branch into the Mac checkout for `sand sign`. It lives in
   the corp repo, not this one: `./tool/go install ./misc/aif` from a checkout of it.
 - a commit signing key configured in git, and the same key added to your GitHub account as a
@@ -38,35 +38,23 @@ rest. `pull` says which binary it could not find rather than starting nothing qu
 
 ## Install
 
-On the box, from this repo:
+Two commands, on the Mac and again on the box:
 
-    make install         # ~/go/bin/sand, or $GOBIN
-    sand skill install   # writes ~/.agents/skills/sand.md and links the harnesses present
-
-`skill install` is the only reason the box needs the binary. The skill text is compiled into
-it, so the skill can never be a different version from the tool it describes.
-
-On the Mac, first time:
-
-    git clone git@github.com:guygrigsby/sand.git
-    cd sand
-    make install
+    curl -fsSL https://raw.githubusercontent.com/guygrigsby/sand/main/install.sh | bash
     sand config init     # asks for the box, writes ~/.config/sand/config.yaml
 
-After that, in the Mac's copy, on the branch you want from the box:
+The script picks the binary for the machine it is on, puts it in `~/.local/bin`, runs it to prove
+the download is not a truncated file, and on a machine with an agent harness installed also runs
+`sand skill install`, so the box takes the same two commands as the Mac. `BIN_DIR` moves where it
+lands and `SAND_VERSION=v0.1.0` pins a release. `sand --version` says which one you have.
 
-    make sync            # fetch that branch from the box, fast forward, install
+The box needs the binary only for the skill: the skill text is compiled into `sand`, so it can
+never be a different version from the tool it describes, and the box needs no checkout of this
+repo to install it.
 
-`make sync` takes no argument: it reads the box from `sand config get host`, the same host the
-tool itself uses, so `sand config set host <alias>` moves both. `BOX=<alias>` overrides. It
-fast forwards only, so it stops rather than discarding a branch the Mac has signed; `sand sign`
-is what puts that branch on the box.
-
-Or push from the box, when the Mac accepts ssh: `make ship MAC=user@mac`. That is an rsync with
-`--delete` into `src/sand`, a build copy rather than a checkout.
-
-The box is the canonical source, so never edit the Mac's copy: `sync` refuses to overwrite the
-edit, and nothing downstream of it will accept an uncommitted change anyway.
+Developing `sand` itself is a different thing and lives under [Development](#development): the
+clone, `make sync` and the ring only matter if you are changing the tool. Using it on your own
+repos needs neither.
 
 ## Use
 
@@ -209,12 +197,36 @@ carries a signature. So `sand` fails closed wherever it cannot keep that true.
 
 ## Development
 
-Edit in this repo, on the box. Not on the Mac, not over ssh into a deploy target.
+Edit in this repo, on the box. Not on the Mac, not over ssh into a deploy target. Go 1.26+ is a
+requirement here and nowhere else.
 
     make check   # the gate: go vet, gofmt, tests, linux build, darwin/arm64 build
 
-`make check` is what CI would call and what to run before every commit. The darwin build is
-part of it because the Mac is the real target.
+`make check` is what CI calls and what to run before every commit. The darwin build is part of it
+because the Mac is the real target.
+
+The Mac keeps a clone of this repo for one reason, to sign and push what the box wrote:
+
+    make sync            # fetch the current branch from the box, fast forward, install
+
+`make sync` takes no argument: it reads the box from `sand config get host`, the same host the
+tool itself uses, so `sand config set host <alias>` moves both. `BOX=<alias>` overrides. It fast
+forwards only, so it stops rather than discarding a branch the Mac has signed; `sand sign` is what
+puts that branch on the box. Or push from the box, when the Mac accepts ssh: `make ship
+MAC=user@mac`, an rsync with `--delete` into `src/sand`, a build copy rather than a checkout.
+
+The box is the canonical source, so never edit the Mac's copy: `sync` refuses to overwrite the
+edit, and nothing downstream of it will accept an uncommitted change anyway. None of this applies
+to using `sand` on any other repo, where `aif` inside `sand sign` does the importing.
+
+Releases are a signed tag, cut from the Mac:
+
+    make release VERSION=v0.1.0   # make check, git tag -s, push the tag
+
+Pushing the tag is what starts the build: `.github/workflows/release.yml` runs `make check`, then
+`make dist` for both Macs and both linuxes, and attaches the four binaries to the release that
+`install.sh` downloads. The build happens there rather than here so that what ships is the tag as
+GitHub sees it, and the box cannot cut one because it has no credential that can push.
 
 The box has no `gh` and no GitHub API token, so the tests fake both ends: a
 `gh` stub on `PATH` and `SAND_SSH` pointed at a shim that runs the "remote" command locally
