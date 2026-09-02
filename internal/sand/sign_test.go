@@ -475,6 +475,77 @@ func TestSignRefusesAPreSigningLineage(t *testing.T) {
 	}
 }
 
+// The offered form of the refusal above: answer y and the run does the rebase, tells the
+// box, and keeps going, ending where a manual recovery followed by `sand sign --push` would.
+func TestSignRepairsAPreSigningLineageWhenAsked(t *testing.T) {
+	dir, remote := signRepo(t)
+	box := boxRepo(t, dir, "feature")
+	var out strings.Builder
+	o := signOpts(&out, "")
+	o.Push, o.Box = true, box
+	if _, err := Sign(o); err != nil {
+		t.Fatalf("first round: %v\n%s", err, out.String())
+	}
+
+	// The box never took the rewrite and commits again on the stale lineage, so put it back
+	// there: round one's realignment moved it to the signed history.
+	backup := mustRun(t, dir, "git", "branch", "--list", "--format=%(refname:short)", "feature-before-signing-*")
+	mustRun(t, dir, "git", "reset", "--hard", "--quiet", backup)
+	commit(t, dir, "d.txt", "d\n", "feature: d, on the stale lineage")
+	mustRun(t, dir, "git", "push", "--force", "--quiet", box, "feature")
+
+	out.Reset()
+	o.In = strings.NewReader("y\n")
+	if _, err := Sign(o); err != nil {
+		t.Fatalf("repair run: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "Repaired:") {
+		t.Errorf("repair not reported:\n%s", out.String())
+	}
+
+	local := mustRun(t, dir, "git", "rev-parse", "feature")
+	for name, ref := range map[string]string{"remote": remote, "box": box} {
+		if got := mustRun(t, dir, "git", "--git-dir", ref, "rev-parse", "feature"); got != local {
+			t.Errorf("%s at %s, local at %s", name, short(got), short(local))
+		}
+	}
+	// The replayed commit is there, signed, and no subject appears twice: the second copy
+	// of the replaced lineage is gone, not signed alongside the first.
+	log := mustRun(t, dir, "git", "log", "--format=%s", "feature", "--not", "origin/main")
+	if strings.Count(log, "feature: a") != 1 || strings.Count(log, "feature: d, on the stale lineage") != 1 {
+		t.Errorf("unexpected history:\n%s", log)
+	}
+	for _, sha := range strings.Fields(mustRun(t, dir, "git", "rev-list", "feature", "--not", "origin/main")) {
+		if raw := mustRun(t, dir, "git", "cat-file", "commit", sha); !strings.Contains(raw, "gpgsig") {
+			t.Errorf("unsigned commit remains: %s", short(sha))
+		}
+	}
+}
+
+// The merged-twin repair drops rather than replays: the branch comes out at the base and
+// there is nothing left to sign.
+func TestSignRepairDropsACommitAlreadyOnTheBase(t *testing.T) {
+	dir, _ := signRepo(t)
+	old := mustRun(t, dir, "git", "rev-parse", "main")
+	mustRun(t, dir, "git", "switch", "--quiet", "-c", "merged", old)
+	mustRun(t, dir, "git", "commit", "--quiet", "--allow-empty", "-m", "main: unrelated")
+	commit(t, dir, "dup.txt", "dup\n", "the duplicated one")
+	mustRun(t, dir, "git", "push", "--quiet", "origin", "merged:main")
+	mustRun(t, dir, "git", "switch", "--quiet", "-c", "dup", old)
+	commit(t, dir, "dup.txt", "dup\n", "the duplicated one")
+
+	var out strings.Builder
+	o := signOpts(&out, "y\n")
+	o.Push = true
+	o.Branch = "dup"
+	if _, err := Sign(o); err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	if got, want := mustRun(t, dir, "git", "rev-parse", "dup"), mustRun(t, dir, "git", "rev-parse", "origin/main"); got != want {
+		t.Errorf("dup at %s, want it dropped onto origin/main %s", short(got), short(want))
+	}
+}
+
 func TestSignSignsEveryBranchCommitAndKeepsTheMerge(t *testing.T) {
 	dir, remote := signRepo(t)
 	before := mustRun(t, dir, "git", "log", "--format=%P %s", "feature", "--not", "origin/main")
