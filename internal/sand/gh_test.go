@@ -56,6 +56,11 @@ func TestHTTPErrorUsesAPIMessage(t *testing.T) {
 	if got := plain.Error(); got != "HTTP 500: upstream broke" {
 		t.Errorf("got %q", got)
 	}
+	detail := &httpError{status: 422, body: `{"message":"Validation Failed","errors":[{"resource":"PullRequestReview","field":"user_id","message":"user_id can only have one pending review per pull request"}]}`}
+	want := "HTTP 422: Validation Failed (user_id: user_id can only have one pending review per pull request)"
+	if got := detail.Error(); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
 }
 
 func TestComposeReplyLinksCommit(t *testing.T) {

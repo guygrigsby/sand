@@ -95,6 +95,13 @@ remotes can change the answer.
   cherry-pick, a merge that brought a copy back) makes it false, so quoting either is a coin
   flip. The corrected hash is written back to the box
   by the front matter rewrite that marks it sent. This is why `push` takes `--remote`.
+- **A 422 on every reply is a pending review on the PR, not a bad thread.** The replies
+  endpoint attaches each reply to a fresh pending review, GitHub allows one pending review
+  per user per PR, and a review draft left unsubmitted in the web UI therefore rejects every
+  reply with `user_id can only have one pending review per pull request`. The draft is
+  visible only to its owner: `gh api repos/{o}/{r}/pulls/{n}/reviews`, check its comments
+  are nothing worth keeping, `DELETE` it, re-run. The sub-error used to be dropped with the
+  rest of the `errors` array; `httpError` now prints it.
 - **`push` rewrites only the front matter** of a file it has posted, so the conversation text
   stays byte-identical to what pull wrote.
 - **"Already posted" is answered by GitHub, not by `status:` on the box.** The POST goes out and
