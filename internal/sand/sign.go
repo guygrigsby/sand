@@ -849,11 +849,15 @@ func duplicatedOnRemote(g gitCmd, commits []string, remoteBranch, remoteBase str
 		}
 	}
 
+	ours, err := g.identitiesOf(commits)
+	if err != nil {
+		return nil, err
+	}
 	var dups []dupCommit
 	for _, sha := range commits {
-		id, err := g.identity(sha)
-		if err != nil {
-			return nil, err
+		id, ok := ours[sha]
+		if !ok {
+			return nil, fmt.Errorf("git did not report a tree and subject for %s", short(sha))
 		}
 		if twins := pushed[id]; len(twins) > 0 {
 			dups = append(dups, dupCommit{SHA: sha, Twin: twins[0], On: on[id], Subject: identitySubject(id)})
@@ -868,6 +872,27 @@ const commitIdentity = "%T%x00%s"
 
 func (g gitCmd) identity(rev string) (string, error) {
 	return g.capture("show", "-s", "--format="+commitIdentity, rev)
+}
+
+// identitiesOf is that key for a list of commits, in one process rather than one each. It is
+// the same question `identity` answers, asked the way a caller with a branch's worth of commits
+// has to ask it: signing keys every commit it is about to rewrite, and doing that a fork at a
+// time cost more than the rewrite.
+func (g gitCmd) identitiesOf(shas []string) (map[string]string, error) {
+	if len(shas) == 0 {
+		return nil, nil
+	}
+	out, err := g.capture(append([]string{"show", "-s", "--format=%H%x00" + commitIdentity}, shas...)...)
+	if err != nil {
+		return nil, err
+	}
+	byCommit := make(map[string]string, len(shas))
+	for _, line := range strings.Split(out, "\n") {
+		if sha, id, ok := strings.Cut(line, "\x00"); ok {
+			byCommit[sha] = id
+		}
+	}
+	return byCommit, nil
 }
 
 // identities maps that key to the commits on a ref that carry it. Bounded like the scan in
@@ -1043,6 +1068,27 @@ const (
 	commitUnknown                      // git here cannot say: no such ref, no such object
 )
 
+// branchIndex is the pushed branch read once: the tree-plus-subject key of every commit on it,
+// which is what a recorded hash is matched against. Once, because `push` asks the same question
+// per reply, and asking it per reply meant re-reading the branch per reply. A nil byID is every
+// way the question cannot be answered here — no such ref, or git could not say — and every
+// caller answers all of those the same way, with commitUnknown.
+type branchIndex struct {
+	ref  string
+	byID map[string][]string
+}
+
+func newBranchIndex(g gitCmd, ref string) *branchIndex {
+	if ref == "" || !g.refExists(ref) {
+		return &branchIndex{ref: ref}
+	}
+	byID, err := g.identities(ref)
+	if err != nil {
+		return &branchIndex{ref: ref}
+	}
+	return &branchIndex{ref: ref, byID: byID}
+}
+
 // commitOnBranch says which hash a reply should quote. The agent on the box commits without
 // a key, writes that hash into the thread file, and then signing re-creates the commit — so
 // the recorded hash stops existing exactly when the branch becomes postable. The replacement
@@ -1054,15 +1100,15 @@ const (
 // and a duplicated commit (a cherry-pick, a merge that brought a copy back, a branch signed
 // twice) means the claim is false. Quoting either one is a coin flip, and a reply that points
 // a reviewer at the wrong commit is worse than a reply that has not been posted yet.
-func commitOnBranch(g gitCmd, recorded, branchRef string) (string, commitState) {
-	if !g.refExists(branchRef) {
+func commitOnBranch(g gitCmd, recorded string, branch *branchIndex) (string, commitState) {
+	if branch == nil || branch.byID == nil {
 		return recorded, commitUnknown
 	}
 	full, err := g.capture("rev-parse", "--verify", recorded+"^{commit}")
 	if err != nil {
 		return recorded, commitUnknown
 	}
-	if exec.Command("git", "merge-base", "--is-ancestor", full, branchRef).Run() == nil {
+	if exec.Command("git", "merge-base", "--is-ancestor", full, branch.ref).Run() == nil {
 		return recorded, commitCurrent
 	}
 
@@ -1070,12 +1116,8 @@ func commitOnBranch(g gitCmd, recorded, branchRef string) (string, commitState) 
 	if err != nil {
 		return recorded, commitUnknown
 	}
-	onBranch, err := g.identities(branchRef)
-	if err != nil {
-		return recorded, commitUnknown
-	}
 	var matches []string
-	for _, sha := range onBranch[want] {
+	for _, sha := range branch.byID[want] {
 		matches = append(matches, short(sha))
 	}
 	switch len(matches) {
@@ -1117,25 +1159,38 @@ type branchCommit struct {
 // "can this machine verify it", which needs a key ring and a trust config; what decides
 // whether a commit has to be re-signed is only whether the header is there at all. The header
 // is gpgsig for both OpenPGP and ssh signing, gpgsig-sha256 in a sha256 repository.
+//
+// One process for the whole branch. `--header` prints each commit's raw header, which is where
+// the parents, both identities and the signature all are, so the `git cat-file commit` this
+// used to run per commit was a fork for information git had already been asked for: 64 of them
+// on a 63-commit branch, and a signing run reads the branch twice, before the rewrite and
+// after. Entries are NUL-separated, each one the object name, then the header, then a blank
+// line and the message indented — which is why hasSignature and headerEmail, both of which
+// stop at that blank line, keep working unchanged on it.
 func (g gitCmd) branchCommits(rev, base string) ([]branchCommit, error) {
-	list, err := g.capture("rev-list", "--reverse", "--parents", rev, "--not", base)
+	out, err := g.capture("rev-list", "--reverse", "--header", rev, "--not", base)
 	if err != nil {
 		return nil, err
 	}
 	var commits []branchCommit
-	for _, line := range strings.Split(list, "\n") {
-		f := strings.Fields(line)
-		if len(f) == 0 {
+	for _, entry := range strings.Split(out, "\x00") {
+		sha, header, ok := strings.Cut(strings.TrimLeft(entry, "\n"), "\n")
+		if !ok || len(sha) < 40 { // the trailing NUL leaves an empty last entry
 			continue
 		}
-		raw, err := g.capture("cat-file", "commit", f[0])
-		if err != nil {
-			return nil, err
+		c := branchCommit{
+			SHA: sha, Signed: hasSignature(header),
+			Author: headerEmail(header, "author"), Committer: headerEmail(header, "committer"),
 		}
-		commits = append(commits, branchCommit{
-			SHA: f[0], Parents: f[1:], Signed: hasSignature(raw),
-			Author: headerEmail(raw, "author"), Committer: headerEmail(raw, "committer"),
-		})
+		for _, line := range strings.Split(header, "\n") {
+			if line == "" {
+				break // end of the header; the message is next and is not one of these
+			}
+			if p, ok := strings.CutPrefix(line, "parent "); ok {
+				c.Parents = append(c.Parents, strings.TrimSpace(p))
+			}
+		}
+		commits = append(commits, c)
 	}
 	return commits, nil
 }

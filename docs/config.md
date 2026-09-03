@@ -62,6 +62,13 @@ box checkout `git` can read (`boxCurrentBranch`, the same call signing uses), an
   has, and an accepted default is written as empty, never as today's default: `harness: claude`
   in the file is indistinguishable from a chosen value and would freeze the default on this
   machine forever.
+- **The checks run concurrently and print in a fixed order.** Every one of them is round trips:
+  three to GitHub, three to the box over ssh, and serially a run costs the sum of every latency
+  between here and two other machines. Against stubs at 250ms a call that was 1.28s, and 517ms
+  concurrent. Each check writes into its own buffer (`concurrently`, `gaps.absorb`) and the
+  buffers print in the order they were listed, so the output does not depend on which answer
+  arrived first — a diagnose command whose lines move around is one nobody can compare against
+  the last run. `TestConcurrentChecksPrintInTheOrderListed` is that invariant.
 - **Every gap is collected, not just the first.** They are independent, and a command that
   reports one per run is a command run four times. Each prints as it is found and again in a
   numbered summary at the end, because the fixes are what happens next and scrolling back for

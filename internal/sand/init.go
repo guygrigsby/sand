@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -31,26 +32,54 @@ type InitOpts struct {
 	Out  io.Writer
 }
 
-// gaps is what this Mac still needs, collected rather than returned one at a time: a setup run
-// that stops at the first thing missing makes the operator run it once per problem, and the
-// problems are independent. Each is a line saying what is wrong and the command that fixes it.
+// gaps is what one check found: its lines, and what of it is still missing. Collected rather
+// than returned one at a time, because a setup run that stops at the first thing missing makes
+// the operator run it once per problem and the problems are independent.
+//
+// Buffered rather than written straight out, because the checks run concurrently. Every one of
+// them is round trips — to GitHub, to the box over ssh — and serially a run costs the sum of
+// every latency between here and two other machines. The buffers are printed in order
+// afterwards, so a concurrent run reads exactly like a serial one.
 type gaps struct {
-	out   io.Writer
+	buf   strings.Builder
 	items []string
 }
 
 // ok reports a check that passed, one line, so the run reads as a list of answers rather than
 // silence punctuated by complaints.
 func (g *gaps) ok(format string, a ...any) {
-	fmt.Fprintf(g.out, "  ok    %s\n", fmt.Sprintf(format, a...))
+	fmt.Fprintf(&g.buf, "  ok    %s\n", fmt.Sprintf(format, a...))
 }
 
-// gap reports one that did not, with the fix it needs. Printed as it is found, and kept for the
-// summary: the fixes are what the operator does next, and scrolling back for them is the thing
-// that makes people skip one.
+// gap reports one that did not, with the fix it needs. Kept as well as printed: the fixes are
+// what the operator does next, and scrolling back for them is what makes people skip one, so
+// they are repeated in the summary.
 func (g *gaps) gap(what, fix string) {
-	fmt.Fprintf(g.out, "  TODO  %s\n        %s\n", what, fix)
+	fmt.Fprintf(&g.buf, "  TODO  %s\n        %s\n", what, fix)
 	g.items = append(g.items, what+"\n    "+fix)
+}
+
+// absorb takes what a nested set of concurrent checks found, in the order they were listed.
+func (g *gaps) absorb(others ...*gaps) {
+	for _, o := range others {
+		g.buf.WriteString(o.buf.String())
+		g.items = append(g.items, o.items...)
+	}
+}
+
+// concurrently runs each check with its own buffer and returns them in the order given. One
+// place, because both the top level and the box's own checks want the same thing: independent
+// latency overlapped, output that still reads top to bottom.
+func concurrently(checks ...func(*gaps)) []*gaps {
+	found := make([]*gaps, len(checks))
+	var wg sync.WaitGroup
+	for i, check := range checks {
+		found[i] = &gaps{}
+		wg.Add(1)
+		go func() { defer wg.Done(); check(found[i]) }()
+	}
+	wg.Wait()
+	return found
 }
 
 // Init asks for the config, writes it, then checks everything else a Mac needs and says what is
@@ -68,11 +97,14 @@ func Init(o InitOpts) error {
 	}
 	fmt.Fprintf(o.Out, "\nwrote %s\n\nChecking what else this Mac needs:\n", path)
 
-	g := &gaps{out: o.Out}
-	checkGitHub(g)
-	checkSigning(g)
-	checkThisCheckout(g)
-	checkBox(g, cfg)
+	g := &gaps{}
+	g.absorb(concurrently(
+		checkGitHub,
+		checkSigning,
+		checkThisCheckout,
+		func(g *gaps) { checkBox(g, cfg) },
+	)...)
+	io.WriteString(o.Out, g.buf.String())
 
 	if len(g.items) == 0 {
 		fmt.Fprintf(o.Out, "\nReady. `sand new <issue>` starts one, `sand status` says where it is.\n")
@@ -432,15 +464,32 @@ func checkBox(g *gaps, cfg Config) {
 	}
 	g.ok("ssh %s answers", cfg.Host)
 
-	if boxURL, _, boxDir := thisRepoOnBox(); boxURL != "" {
-		if branch, err := boxCurrentBranch(gitCmd{out: io.Discard}, boxURL); err != nil {
-			g.gap(fmt.Sprintf("no git checkout at %s that git can read: %v", boxURL, firstLine(err.Error(), 200)),
-				fmt.Sprintf("on the box: git clone <url> %s", boxDir))
-		} else {
-			g.ok("box has a checkout at %s, on %s", boxURL, cmp.Or(branch, "a detached HEAD"))
-		}
-	}
+	// Two more round trips to the same machine, and neither needs the other's answer.
+	g.absorb(concurrently(
+		func(g *gaps) { checkBoxCheckout(g) },
+		func(g *gaps) { installBoxSkill(g, cfg) },
+	)...)
+}
 
+// checkBoxCheckout asks the box's checkout of this repo the one question that proves git can
+// talk to it at all, which is what the import at the top of every signing run needs.
+func checkBoxCheckout(g *gaps) {
+	boxURL, _, boxDir := thisRepoOnBox()
+	if boxURL == "" {
+		return // not in a repo: checkThisCheckout says so, and once is enough
+	}
+	branch, err := boxCurrentBranch(gitCmd{out: io.Discard}, boxURL)
+	if err != nil {
+		g.gap(fmt.Sprintf("no git checkout at %s that git can read: %v", boxURL, firstLine(err.Error(), 200)),
+			fmt.Sprintf("on the box: git clone <url> %s", boxDir))
+		return
+	}
+	g.ok("box has a checkout at %s, on %s", boxURL, cmp.Or(branch, "a detached HEAD"))
+}
+
+// installBoxSkill is the one thing init writes to the other machine, because the Mac is what
+// carries the text and a box with no skill is a box whose agent does not know the loop.
+func installBoxSkill(g *gaps, cfg Config) {
 	skill, err := InstallSkillRemote(cfg.Host)
 	if err != nil {
 		g.gap("could not install the skill on the box: "+firstLine(err.Error(), 200),

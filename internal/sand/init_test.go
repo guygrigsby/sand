@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // A Mac with everything in place: the run answers every check and says so, and the config it
@@ -148,10 +149,9 @@ func TestInitChecksTheGPGKeyIsOnTheAccount(t *testing.T) {
 	}
 	check := func(t *testing.T) string {
 		t.Helper()
-		var out strings.Builder
-		g := &gaps{out: &out}
+		g := &gaps{}
 		checkSigning(g)
-		return out.String()
+		return g.buf.String()
 	}
 
 	// GitHub names the key by its long id while gpg here knows it by fingerprint, so the match
@@ -260,5 +260,27 @@ fpr:::::::::AAAA1111BBBB2222CCCC33339BE9F4A1C0FFEE00:
 		if sameGPGKey(name, ids) {
 			t.Errorf("%q matched a key it is not", name)
 		}
+	}
+}
+
+// The checks run concurrently, so the thing that can quietly break is the reading order: a run
+// that prints its answers in whatever order the network returned them is a run nobody can
+// compare against the last one. The slowest check is listed first here, which is the case that
+// fails if the buffers are printed as they finish.
+func TestConcurrentChecksPrintInTheOrderListed(t *testing.T) {
+	found := concurrently(
+		func(g *gaps) { time.Sleep(30 * time.Millisecond); g.ok("first") },
+		func(g *gaps) { time.Sleep(10 * time.Millisecond); g.gap("second", "fix it") },
+		func(g *gaps) { g.ok("third") },
+	)
+	var all gaps
+	all.absorb(found...)
+	printed := all.buf.String()
+	first, second, third := strings.Index(printed, "first"), strings.Index(printed, "second"), strings.Index(printed, "third")
+	if first > second || second > third {
+		t.Errorf("printed out of order:\n%s", printed)
+	}
+	if len(all.items) != 1 {
+		t.Errorf("kept %d gap(s), want the one that was reported: %v", len(all.items), all.items)
 	}
 }

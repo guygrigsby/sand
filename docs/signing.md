@@ -97,6 +97,14 @@ history on the box. Flags: `--remote` (origin), `--base` (main), `--yes`, `--pus
 - **The recovery branch name gets a `-2`, `-3` suffix if taken.** Two runs in the same second
   are normal in a review loop and the second one must not fail on the first one's name.
 
+- **A branch is read in one process, not one per commit.** `branchCommits` needs each commit's
+  parents, both identities and whether it already carries a signature, and all four are in the
+  raw header, so it asks `git rev-list --reverse --header` once instead of running `git cat-file
+  commit` per commit. That was 64 forks on a 63-commit branch, and a signing run reads the
+  branch twice, before the rewrite and after: 114ms of fork became 3ms. Same story for the
+  duplicate check, where `identitiesOf` batches what was a `git show` per commit (127ms → 13ms),
+  and for `push`, where the branch's identity index is built once per run rather than per reply.
+  The benchmarks are in `bench_test.go`; `go test` does not run them.
 - **filter-branch, not rebase.** It replays the original trees with rewritten parents, so merge
   commits survive and no content conflict is possible. A rebase would flatten or stall.
 - **No branch named means the two machines have to agree which one it is.** The Mac's current

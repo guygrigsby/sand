@@ -13,7 +13,7 @@ import (
 // pushed main, a feature branch with unsigned commits and a merge commit, and an ssh signing
 // key. No box, so the import has nothing to do and the branch signed is the one here; the
 // tests that care about the box pass one in.
-func signRepo(t *testing.T) (dir, remote string) {
+func signRepo(t testing.TB) (dir, remote string) {
 	t.Helper()
 	if _, err := exec.LookPath("ssh-keygen"); err != nil {
 		t.Skip("ssh-keygen not available, cannot sign")
@@ -54,7 +54,7 @@ func signRepo(t *testing.T) (dir, remote string) {
 	return dir, remote
 }
 
-func mustRun(t *testing.T, dir string, name string, args ...string) string {
+func mustRun(t testing.TB, dir string, name string, args ...string) string {
 	t.Helper()
 	c := exec.Command(name, args...)
 	c.Dir = dir
@@ -65,7 +65,7 @@ func mustRun(t *testing.T, dir string, name string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-func commit(t *testing.T, dir, file, body, message string) {
+func commit(t testing.TB, dir, file, body, message string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, file), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
@@ -280,7 +280,7 @@ func TestSignRefusesWhenTheBoxCannotHandTheBranchOver(t *testing.T) {
 // imported. Bare, because what the realignment has to get right is the ref; a real box also has
 // a working tree, and following it is receive.denyCurrentBranch=updateInstead's job rather than
 // anything this code does.
-func boxRepo(t *testing.T, dir, branch string) string {
+func boxRepo(t testing.TB, dir, branch string) string {
 	t.Helper()
 	box := filepath.Join(t.TempDir(), "box.git")
 	mustRun(t, dir, "git", "init", "--quiet", "--bare", box)
@@ -293,7 +293,7 @@ func boxRepo(t *testing.T, dir, branch string) string {
 // points that URL at a local repository, so the import and the realigning push run for what they
 // are in a test that has no second machine. `SAND_SSH` cannot do this job: it is sand's own ssh
 // and git never reads it.
-func boxAtURL(t *testing.T, dir, branch string) string {
+func boxAtURL(t testing.TB, dir, branch string) string {
 	t.Helper()
 	box := boxRepo(t, dir, branch)
 	// The real box has that branch checked out, and its HEAD is what says which round is
@@ -307,7 +307,7 @@ func boxAtURL(t *testing.T, dir, branch string) string {
 // repository with the branch checked out, and receive.denyCurrentBranch left as `git init` leaves
 // it. That combination is what rejects the realigning push, so it is what the pre-flight has to be
 // tested against.
-func boxWorkingCheckout(t *testing.T, dir, branch string) string {
+func boxWorkingCheckout(t testing.TB, dir, branch string) string {
 	t.Helper()
 	box := filepath.Join(t.TempDir(), "box")
 	mustRun(t, dir, "git", "init", "--quiet", "--initial-branch=unborn", box)
@@ -318,7 +318,7 @@ func boxWorkingCheckout(t *testing.T, dir, branch string) string {
 
 // sshShim is the e2e stand-in for ssh on its own: it drops the host and runs the command here, so
 // the questions signing asks the box are exercised without a second machine.
-func sshShim(t *testing.T) string {
+func sshShim(t testing.TB) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "ssh-shim")
 	if err := os.WriteFile(p, []byte(fakeSSH), 0o755); err != nil {
@@ -951,7 +951,7 @@ func TestCommitOnBranch(t *testing.T) {
 		{"no such commit here", "0000000", "origin/feature", commitUnknown, "0000000"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, state := commitOnBranch(g, tc.hash, tc.ref)
+			got, state := commitOnBranch(g, tc.hash, newBranchIndex(g, tc.ref))
 			if state != tc.want {
 				t.Errorf("state = %d, want %d", state, tc.want)
 			}
@@ -1050,7 +1050,7 @@ func TestCommitOnBranchRefusesToGuessBetweenTwoMatches(t *testing.T) {
 	mustRun(t, dir, "git", "update-ref", "refs/heads/feature", d2)
 	mustRun(t, dir, "git", "push", "--quiet", "origin", "feature")
 
-	got, state := commitOnBranch(g, recorded, "origin/feature")
+	got, state := commitOnBranch(g, recorded, newBranchIndex(g, "origin/feature"))
 	if state != commitAmbiguous {
 		t.Fatalf("state = %d, want commitAmbiguous (%d); got hash %q", state, commitAmbiguous, got)
 	}

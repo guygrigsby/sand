@@ -1222,6 +1222,7 @@ func runPush(args []string) error {
 	// Only worth checking when there is something to post.
 	g := gitCmd{out: os.Stdout}
 	branchRef := ""
+	var branch *branchIndex
 	// What this account has already posted, per thread. The box's `status: sent` is a
 	// cache of this and can be lost (see the posted map below), so GitHub is asked.
 	posted := map[int64][]string{}
@@ -1249,6 +1250,9 @@ func runPush(args []string) error {
 			// would condemn perfectly good commits. Offline, this fails and the checks
 			// below degrade to "cannot say".
 			_, _ = g.capture("fetch", "--quiet", flagRemote)
+			// Read once, here, rather than once per reply: every recorded hash is matched
+			// against the same branch, and a round answers several threads.
+			branch = newBranchIndex(g, branchRef)
 		}
 	}
 
@@ -1278,7 +1282,7 @@ func runPush(args []string) error {
 		} else if branchRef != "" {
 			// The box had no key, so what the agent wrote down is the hash of an unsigned
 			// commit that signing has since replaced.
-			switch h, state := commitOnBranch(g, t.Meta.Commit, branchRef); state {
+			switch h, state := commitOnBranch(g, t.Meta.Commit, branch); state {
 			case commitMoved:
 				fmt.Printf("%s: signing moved %s to %s\n", name, t.Meta.Commit, h)
 				t.Meta.Commit = h
