@@ -48,7 +48,7 @@ PR defaults to the one for the Mac's current branch; a number or a PR URL overri
 
 **Which PR the current branch has is asked by repo and head, never guessed from the remotes.**
 `gh pr view` with no argument works the head repo out of the local remotes, and the box is one of
-them: in aperture it read `guy-llm-sandbox:projects/aperture` as owner `projects`, looked for a
+them: in another repo it read `box:projects/other` as owner `projects`, looked for a
 head of `projects:<branch>`, and reported no open PR for a branch whose PR was open. `sand
 comments pull`, `ci pull` and `comments push` all entered through that, while `status` and `up`
 were fine, because they went through `currentBranchPR`, which passes `--repo` and `--head`.

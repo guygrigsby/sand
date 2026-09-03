@@ -20,7 +20,7 @@ and `--all`.
   real job runs to megabytes of setup noise with the reason at the end. `--log-lines` (300)
   bounds it, a second cap bounds the bytes (one base64 line beats a line-only cap), and the count
   of dropped lines is printed in the file so nobody reasons from a log they think is whole.
-- **A check that is not a GitHub Actions run gets its link and no log.** Buildkite (aperture has
+- **A check that is not a GitHub Actions run gets its link and no log.** Buildkite (another repo has
   both) posts a legacy commit status; the Mac has no client for it and guessing at one would be
   inventing a second integration. `actionsRun()` reads the run id out of `/actions/runs/<id>` and
   everything else is link-only, with the file saying why.

@@ -78,8 +78,9 @@ func signOpts(out *strings.Builder, answer string) SignOpts {
 	return SignOpts{Remote: "origin", Base: "main", Yes: true, In: strings.NewReader(answer), Out: out}
 }
 
-// `sand sign push`, a slip for `sand sign --push`, once reached `aif` as the branch name and aif
-// read it as its own push subcommand: this machine's HEAD went to the box before git ever said
+// `sand sign push`, a slip for `sand sign --push`, once reached the old import binary as the
+// branch name, and it read the word as its own push subcommand: this machine's HEAD went to the
+// box before git ever said
 // "invalid reference: push". The import is a fetch now and cannot do that, but a name nothing can
 // resolve still gets a refusal that names it rather than a failed fetch of a typo.
 func TestSignRefusesABranchNothingHas(t *testing.T) {
@@ -100,8 +101,9 @@ func TestSignRefusesABranchNothingHas(t *testing.T) {
 }
 
 // The import is the reason signing talks to the box before it reads anything: what gets signed
-// is the box's branch, not whatever this checkout was left on. This was `aif`, which reached the
-// box through a git remote named `ai` and refused to sign in any checkout that did not have one.
+// is the box's branch, not whatever this checkout was left on. This used to be a separate binary
+// that reached the box through a git remote named `ai`, and refused to sign in any checkout that
+// did not have such a remote.
 func TestSignImportsTheBoxsBranch(t *testing.T) {
 	dir, _ := signRepo(t)
 	// The box as it is, not a bare stand-in: the branch is checked out there, which is what the
@@ -226,7 +228,7 @@ func TestSignKeepsWhatTheImportTakesOffTheBranch(t *testing.T) {
 // state the whole realignment exists to stay out of.
 //
 // The two ways it fails need telling apart, because the next move is a different one and git
-// answers "exit status 128" to both: an unreachable box is the tailnet or the alias, a box
+// answers "exit status 128" to both: an unreachable box is the network or the alias, a box
 // without the branch is the branch.
 func TestSignRefusesWhenTheBoxCannotHandTheBranchOver(t *testing.T) {
 	t.Run("the box does not answer", func(t *testing.T) {
@@ -327,7 +329,7 @@ func sshShim(t testing.TB) string {
 	return p
 }
 
-// The failure this repo actually shipped, in aperture rather than here. `git init` leaves
+// The failure this repo actually shipped, in another repo rather than here. `git init` leaves
 // receive.denyCurrentBranch unset, git defaults it to refuse, and the box has the branch checked
 // out, so every realigning push was rejected. alignBox runs after the push to the remote, so by
 // then GitHub already had the signed history and the box was on the lineage it replaced: the next
@@ -439,7 +441,7 @@ func TestSignPutsTheRewriteBackOnTheBox(t *testing.T) {
 	}
 }
 
-// The second reason no realigning push had ever landed for aperture, independent of the box's
+// The second reason no realigning push had ever landed for that other repo, independent of the box's
 // receive config: a pre-push hook in the Mac's checkout, refusing every commit it cannot verify a
 // signature on, on every remote. It fires for the box too, where the range is the whole history
 // (there is no remote-tracking ref to bound it), so it counted 53 commits from before this repo
@@ -487,7 +489,7 @@ func TestSignPushesToTheBoxPastALocalPrePushHook(t *testing.T) {
 // A branch can reach signing with every commit signed and the remote still behind it: `git
 // rebase` on a Mac with commit.gpgsign signs what it replays, so recovering from a duplicated
 // lineage hands signing five already-signed commits. `--push` then printed "nothing to sign" and
-// pushed nothing, and aperture's branch sat five commits behind GitHub until it was pushed by
+// pushed nothing, and another repo's branch sat five commits behind GitHub until it was pushed by
 // hand. The signed push from this machine is the one step of the ring nothing else can do.
 func TestSignPushesWhatWasSignedButNeverPushed(t *testing.T) {
 	dir, remote := signRepo(t)
@@ -503,7 +505,7 @@ func TestSignPushesWhatWasSignedButNeverPushed(t *testing.T) {
 	if got := mustRun(t, dir, "git", "--git-dir", remote, "branch", "--list", "feature"); got != "" {
 		t.Fatalf("the remote has the branch already, so this proves nothing: %q", got)
 	}
-	// The operator hands the box the signed branch, which is where the aperture round got to.
+	// The operator hands the box the signed branch, which is where that round got to.
 	mustRun(t, dir, "git", "push", "--quiet", "--force", box, "feature")
 
 	out.Reset()

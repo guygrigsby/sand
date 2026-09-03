@@ -76,7 +76,7 @@ func ResolveTarget(arg string) (Target, error) {
 
 	// No PR given: the branch checked out here is the answer, asked the way status and up ask
 	// it. This used to be a bare `gh pr view`, which guesses the head repo from the local
-	// remotes and reads the box's (guy-llm-sandbox:projects/aperture) as owner "projects": it
+	// remotes and reads the box's (box:projects/other) as owner "projects": it
 	// looked for a head of `projects:<branch>`, found nothing, and said there was no open PR
 	// for a branch whose PR was open. Naming the repo and the head leaves nothing to guess,
 	// and there is one implementation of "which PR is this branch's" rather than two that

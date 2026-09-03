@@ -1,6 +1,6 @@
 # `sand`
 
-Helper CLI for the PR review loop between a Mac and a sandbox dev box. Internal tool.
+Helper CLI for the PR review loop between a Mac and a sandbox dev box.
 
 The box writes the code, merges, and can pull from GitHub but not push to it. The Mac has `gh`,
 the ssh keys and the signing key, never edits code and never merges: it fast forwards, signs and
@@ -174,7 +174,7 @@ which beats the defaults.
 | `model` | the harness's own | model to pass it, in that harness's spelling |
 | `branch_prefix` | `$USER` | what `sand new` puts before `<issue>-<title>` |
 
-`host` has no default because it names one machine on one tailnet. If the tailnet refuses your
+`host` has no default because it names one specific machine on your own network. If ssh refuses your
 Mac's local username, put the login user in the Mac's `~/.ssh/config` or in the host itself:
 `sand config set host ubuntu@<box>`.
 

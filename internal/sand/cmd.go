@@ -893,7 +893,7 @@ func configCmd() *cobra.Command {
 			"file already holds, so running it twice writes the same file twice and a config\n" +
 			"written by an older sand gains the keys added since.\n\n" +
 			"Asks for the sandbox host when neither --host nor the file already names one.\n" +
-			"There is no default for it: it names one machine on one tailnet.",
+			"There is no default for it: it names one specific machine on your own network.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			out := cmd.OutOrStdout()

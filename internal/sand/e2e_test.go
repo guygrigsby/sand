@@ -49,8 +49,8 @@ case "$*" in
     else echo '[{"number":42,"url":"https://github.com/o/r/pull/42","title":"Fix the thing","headRefName":"topic"}]'; fi
     ;;
   *"pr view"*)
-    # A bare "pr view" guesses the head repo from the local remotes, and in aperture the box
-    # remote (guy-llm-sandbox:projects/aperture) reads as owner "projects". Naming the PR or the
+    # A bare "pr view" guesses the head repo from the local remotes, and in another repo the box
+    # remote (box:projects/other) reads as owner "projects". Naming the PR or the
     # repo leaves nothing to guess, so only the bare form fails here.
     if [ "$GH_BAD_HEAD_GUESS" = 1 ]; then
       case "$*" in

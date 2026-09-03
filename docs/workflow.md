@@ -56,7 +56,7 @@ box commits. Creating a ref is bookkeeping, not source editing.
   work for a second person: their `sand new` named a branch after somebody else, and then
   their `sand up` could not find the issue number in a branch they had named themselves.
   `branch_prefix` defaults to `$USER` rather than being asked for like `host`, because unlike a
-  tailnet alias the machine already knows the answer, and an empty prefix is still a working
+  ssh alias the machine already knows the answer, and an empty prefix is still a working
   branch name (`<issue>-<title>`) rather than a stop. One implementation reads and writes it
   (`branchPrefix`), so the name `new` creates is by construction the name `up` parses.
 
