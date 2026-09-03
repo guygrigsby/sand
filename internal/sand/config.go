@@ -146,7 +146,7 @@ func Resolve(hostFlag, remoteDirFlag string) (Config, error) {
 // new field needs nothing here but its own line.
 var configDoc = map[string]string{
 	"host": "ssh alias or user@host for the sandbox; ~/.ssh/config resolves key, user, port.\n" +
-		"# Required, and asked for by `sand config init`: there is no sensible default.",
+		"# Required, and asked for by `sand init`: there is no sensible default.",
 	"remote_dir": "base dir on the sandbox. Per-PR files land in\n" +
 		"# <remote_dir>/<owner>/<repo>/pr-<number>/.",
 	// The harness names come off the harnesses table rather than being retyped, so adding
@@ -156,8 +156,10 @@ var configDoc = map[string]string{
 		"# `pull --no-agent` starts nothing; `pull --agent '<cmd>'` runs something else once.",
 	"model": "model to run it with, in that harness's own spelling. Empty means the\n" +
 		"# harness's default.",
+	// No "unset means $USER" here: writeConfig names every default under its key, and this one
+	// resolves to a name, so saying both put "Unset means $USER. Unset means guy." in the file.
 	"branch_prefix": "what `sand new` puts before <issue>-<title>, and what `sand up` reads\n" +
-		"# the issue number back out of. Unset means $USER.",
+		"# the issue number back out of.",
 }
 
 // configField is one settable key: its name in the file and the field behind it.
