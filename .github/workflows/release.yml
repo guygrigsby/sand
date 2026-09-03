@@ -1,0 +1,27 @@
+# A signed tag is what cuts a release: `make release VERSION=v0.1.0` on the Mac pushes it, and
+# the build happens here so that what ships is the tag as GitHub sees it rather than whatever
+# the Mac's working tree held at the time.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # The gate first. A tag that cannot pass check is not a release anyone should install.
+      - run: make check
+      - run: make dist VERSION=${{ github.ref_name }}
+      - run: gh release create "$TAG" build/sand-* --title "sand $TAG" --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}

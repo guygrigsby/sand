@@ -10,6 +10,7 @@ package sand
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -221,7 +222,26 @@ func Sign(o SignOpts) (SignResult, error) {
 		return res, err
 	}
 	if err := checkPreSigningLineage(g, dirty, o.Remote, o.Base, branch, head, o.Box); err != nil {
-		return res, err
+		var le *lineageError
+		if !errors.As(err, &le) || o.DryRun ||
+			!confirm(answers, o.Out, "\nDrop the duplicated commit(s), replay the rest on the pushed branch, and continue?") {
+			return res, err
+		}
+		head, commits, dirty, clean, err = repairLineage(g, o, le, branch, base, head)
+		if err != nil {
+			return res, err
+		}
+		count = len(commits)
+		res.Total, res.Head = count, head
+		res.Rewritten, res.Kept = len(dirty), len(clean)
+		imported = head // the box was just given exactly this
+		if len(dirty) == 0 {
+			// The Mac signs what a rebase replays (commit.gpgsign), so the repair can
+			// leave nothing to do.
+			fmt.Fprintf(o.Out, "All %d commit(s) unique to %s are signed already; nothing to sign.\n", count, branch)
+			return res, publish(g, o, answers, &res, branch, imported, head)
+		}
+		fmt.Fprintf(o.Out, "Repaired: %s is now %s, %d commit(s) to sign.\n", branch, short(head), len(dirty))
 	}
 	if o.DryRun {
 		fmt.Fprintf(o.Out, "\ndry run: history not rewritten, nothing pushed to %s\n", o.Remote)
@@ -572,19 +592,18 @@ func checkPreSigningLineage(g gitCmd, dirty []string, remote, base, branch, head
 
 	// dirty is oldest first, so the last commit with a twin is the boundary: everything above
 	// it is the work that exists only here, and is what has to be replayed.
+	le := &lineageError{boundary: twins[len(twins)-1].SHA}
 	var dups []string
-	boundary, merged := "", false
 	for _, d := range twins {
 		dups = append(dups, fmt.Sprintf("  %s is an unsigned copy of %s on %s: %q",
 			short(d.SHA), short(d.Twin), d.On, d.Subject))
-		boundary = d.SHA
-		merged = merged || d.On == remoteBase
+		le.merged = le.merged || d.On == remoteBase
 	}
 
 	// A commit whose twin is on the base is already merged, so it has to go rather than move:
 	// rebasing onto the base drops it, since git skips what is upstream by patch id.
-	fix := fmt.Sprintf("  git rebase --onto %s %s %s", remoteBranch, short(boundary), branch)
-	if merged {
+	fix := fmt.Sprintf("  git rebase --onto %s %s %s", remoteBranch, short(le.boundary), branch)
+	if le.merged {
 		fix = fmt.Sprintf("  git rebase %s %s   # drops the ones already merged", remoteBase, branch)
 	}
 	if box != "" {
@@ -597,16 +616,71 @@ func checkPreSigningLineage(g gitCmd, dirty []string, remote, base, branch, head
 			"  sand sign --push", branch, head, box, branch)
 	}
 	where := remoteBranch
-	if merged {
+	if le.merged {
 		where = remoteBase + " or " + remoteBranch
 	}
-	return fmt.Errorf("refusing to sign: %d commit(s) are unsigned copies of commits already on %s.\n%s\n"+
+	le.msg = fmt.Sprintf("refusing to sign: %d commit(s) are unsigned copies of commits already on %s.\n%s\n"+
 		"This branch was built on a lineage an earlier signing round replaced, so signing it would put a\n"+
 		"second copy of work that is already there on the remote. A twin on a branch goes away when the\n"+
 		"branch is replaced; a twin on the base is merged and permanent. Drop or replay what is duplicated,\n"+
 		"here on the Mac, then give the box the result before signing again: aif resets this checkout to\n"+
 		"the box's branch, so a rebase the box has not been told about is undone by the next run.\n%s",
 		len(dups), where, strings.Join(dups, "\n"), fix)
+	return le
+}
+
+// lineageError is checkPreSigningLineage's refusal, with what an offered repair needs: the
+// commit to replay from, and whether the fix drops merged commits rather than moving them.
+type lineageError struct {
+	boundary string
+	merged   bool
+	msg      string
+}
+
+func (e *lineageError) Error() string { return e.msg }
+
+// repairLineage does in place what the refusal message spells out: the rebase, then the push
+// that tells the box, because aif resets this checkout to the box's branch and an untold
+// rebase is undone by the next run. It returns the run state recomputed for the new history.
+// The pre-rebase lineage needs no recovery branch: it is the box's, and the box still has it
+// until the push here replaces it.
+func repairLineage(g gitCmd, o SignOpts, le *lineageError, branch, base, imported string) (head string, commits []branchCommit, dirty, clean []string, err error) {
+	args := []string{"rebase", "--onto", o.Remote + "/" + branch, le.boundary, branch}
+	if le.merged {
+		args = []string{"rebase", o.Remote + "/" + o.Base, branch}
+	}
+	if err := g.run(args...); err != nil {
+		return "", nil, nil, nil, fmt.Errorf("rebase did not complete: %w\n"+
+			"resolve and `git rebase --continue`, or `git rebase --abort`, then re-run; "+
+			"the box still has the pre-rebase history", err)
+	}
+	head, err = g.capture("rev-parse", "HEAD")
+	if err != nil {
+		return "", nil, nil, nil, err
+	}
+	if o.Box != "" {
+		// Same lease and --no-verify reasoning as the printed recovery: leased against the
+		// head this run imported, so a box that moved since rejects rather than loses work.
+		lease := "--force-with-lease=refs/heads/" + branch + ":" + imported
+		if err := g.run("push", "--no-verify", lease, o.Box, branch); err != nil {
+			return "", nil, nil, nil, fmt.Errorf("rebased, but the box was not told (%v), and aif "+
+				"resets this checkout to the box's branch: push %s to %s or reset --hard %s before re-running",
+				err, branch, o.Box, short(imported))
+		}
+	}
+	commits, err = g.branchCommits(head, base)
+	if err != nil {
+		return "", nil, nil, nil, err
+	}
+	dirty, clean = splitBySigning(commits)
+	// The rebase is the fix, so anything still duplicated means it did not take (a conflict
+	// resolved by keeping both sides, say). Refuse again rather than sign a second copy.
+	if twins, terr := duplicatedOnRemote(g, dirty, o.Remote+"/"+branch, o.Remote+"/"+o.Base); terr != nil {
+		return "", nil, nil, nil, terr
+	} else if len(twins) > 0 {
+		return "", nil, nil, nil, fmt.Errorf("rebase left %d duplicated commit(s) on %s; refusing to sign", len(twins), branch)
+	}
+	return head, commits, dirty, clean, nil
 }
 
 // dupCommit is one commit whose twin is already on the remote: same tree, same subject, a

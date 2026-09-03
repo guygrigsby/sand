@@ -1,5 +1,16 @@
 BIN := sand
 GO ?= go
+MOD := github.com/guygrigsby/sand
+
+# The tag a release is cut at, and the only thing that stamps a version into the binary. Every
+# other build reads its own revision out of the embedded vcs info, so there is nothing to pass.
+VERSION ?=
+LDFLAGS := $(if $(VERSION),-ldflags "-X $(MOD)/internal/sand.version=$(VERSION)",)
+
+# What a release ships. Two Macs because coworkers have both, and two linuxes because the
+# driving machine is not always a Mac. The box needs none of them: it gets the skill over ssh
+# and runs nothing of this tool.
+PLATFORMS := darwin/arm64 darwin/amd64 linux/amd64 linux/arm64
 
 # The box for sync comes from sand's own config, so it is named in exactly one place and
 # `sand config set host <alias>` moves both the tool and this Makefile. This checkout first:
@@ -11,7 +22,7 @@ GO ?= go
 # Expanded once, inside the sync recipe, so no other target pays for the compile.
 BOX ?= $(shell $(GO) run . config get host 2>/dev/null || sand config get host 2>/dev/null)
 
-.PHONY: build test lint mac check install redeploy ship sync clean
+.PHONY: build test lint mac check install redeploy ship sync dist release clean
 
 build:
 	$(GO) build -o build/$(BIN) .
@@ -28,6 +39,25 @@ mac:
 	GOOS=darwin GOARCH=arm64 $(GO) build -o build/$(BIN)-darwin-arm64 .
 
 check: lint test build mac
+
+# The binaries a release attaches, named the way install.sh asks for them: sand-<os>-<arch>.
+dist:
+	@for p in $(PLATFORMS); do \
+	  os=$${p%/*}; arch=$${p#*/}; \
+	  echo "GOOS=$$os GOARCH=$$arch"; \
+	  GOOS=$$os GOARCH=$$arch $(GO) build $(LDFLAGS) -o build/$(BIN)-$$os-$$arch . || exit 1; \
+	done
+
+# Cutting a release is pushing a signed tag: Actions does the building, so what is released is
+# the tag as GitHub sees it rather than whatever this working tree happened to be. Mac-only by
+# construction, since it ends in a push and the box has no credential that can push.
+release:
+	@[ -n "$(VERSION)" ] || { echo "usage: make release VERSION=v0.1.0"; exit 1; }
+	@case "$(VERSION)" in v*) ;; *) echo "VERSION must start with v: $(VERSION)"; exit 1;; esac
+	@git diff --quiet HEAD || { echo "uncommitted changes: a tag names a commit, so commit first"; exit 1; }
+	$(MAKE) check
+	git tag -s $(VERSION) -m "sand $(VERSION)"
+	git push origin $(VERSION)
 
 # GOBIN, or ~/go/bin.
 install:

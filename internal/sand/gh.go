@@ -532,9 +532,18 @@ func (e *httpError) Error() string {
 	msg := e.body
 	var payload struct {
 		Message string `json:"message"`
+		Errors  []struct {
+			Field   string `json:"field"`
+			Message string `json:"message"`
+		} `json:"errors"`
 	}
 	if json.Unmarshal([]byte(e.body), &payload) == nil && payload.Message != "" {
 		msg = payload.Message
+		// The detail is in errors[]: "Validation Failed" alone says nothing (a pending
+		// review blocking replies hid behind it once, and the whole array was dropped).
+		for _, sub := range payload.Errors {
+			msg += fmt.Sprintf(" (%s: %s)", sub.Field, sub.Message)
+		}
 	}
 	return fmt.Sprintf("HTTP %d: %s", e.status, strings.TrimSpace(msg))
 }

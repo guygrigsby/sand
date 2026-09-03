@@ -16,8 +16,8 @@ for a one-line change. This file is the index and the rules that hold whatever y
 | [docs/review.md](docs/review.md) | `sand comments pull` / `push`: the thread files, what belongs to the box, how "already posted" is decided, and the agent lock. |
 | [docs/ci.md](docs/ci.md) | `sand ci pull`, and why there is no `ci push`. |
 | [docs/config.md](docs/config.md) | the config keys, precedence, and how `config init` / `set` render the file. |
-| [docs/box-skill.md](docs/box-skill.md) | `internal/sand/skill.md`, the harness table, and `sand skill install`. |
-| [docs/development.md](docs/development.md) | `make check`, and how the tests fake `gh` and the box. |
+| [docs/box-skill.md](docs/box-skill.md) | `internal/sand/skill.md`, the harness table, and how the skill reaches a box that runs no `sand`. |
+| [docs/development.md](docs/development.md) | `make check`, how the tests fake `gh` and the box, and how a release is cut. |
 
 `README.md` is the coworker-facing version: what to install, what to run, what it refuses to do.
 Keep it true when behaviour changes, but the reasons belong in `docs/`.
@@ -29,7 +29,8 @@ Keep it true when behaviour changes, but the reasons belong in `docs/`.
                       +------ sand sign, after the push ----+
 
 Every step is the only machine that can do its step. The box has no signing key, no `gh`, no API
-token and a read-only git credential. The Mac never edits code and never merges. Signing
+token, a read-only git credential and no `sand`: the skill its agent works from is written there
+over ssh by the Mac. The Mac never edits code and never merges. Signing
 re-creates commits, so the rewrite has to go back to the box in the same command that made it, or
 the box builds on a lineage that no longer exists. Details and the failure modes: `docs/ring.md`.
 

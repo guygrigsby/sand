@@ -22,7 +22,7 @@ quotes a hash has to be posted after the hash it quotes is final and on the remo
 
 On the Mac:
 
-- Go 1.26+, `git` and `gh` (authenticated: `gh auth status`)
+- `git` and `gh` (authenticated: `gh auth status`)
 - `aif`, which is what imports a box branch into the Mac checkout for `sand sign`. It lives in
   the corp repo, not this one: `./tool/go install ./misc/aif` from a checkout of it.
 - a commit signing key configured in git, and the same key added to your GitHub account as a
@@ -30,43 +30,33 @@ On the Mac:
   post replies quoting them.
 - ssh to the box, by whatever alias you give `sand config init`
 
-On the box: a checkout of each repo under `~/projects/<repo>`, and an agent
-CLI (`claude` or `pi`) with the box-side skill installed, findable over ssh. `ssh box '<cmd>'` gets none of an
+On the box: a checkout of each repo under `~/projects/<repo>`, and an agent CLI (`claude` or
+`pi`), findable over ssh. No `sand` there and nothing to install: the skill that agent works
+from is compiled into the Mac's binary and written over ssh by `sand new` and every `pull`, so
+it is always the version of the tool that started the run. `ssh box '<cmd>'` gets none of an
 interactive shell's PATH, so a harness that only `.zshrc` puts on PATH is not there when `pull`
 looks for it; `~/.local/bin`, `~/bin` and `~/go/bin` are added for you, `~/.zshenv` covers the
 rest. `pull` says which binary it could not find rather than starting nothing quietly.
 
 ## Install
 
-On the box, from this repo:
+Two commands, on the Mac only:
 
-    make install         # ~/go/bin/sand, or $GOBIN
-    sand skill install   # writes ~/.agents/skills/sand.md and links the harnesses present
-
-`skill install` is the only reason the box needs the binary. The skill text is compiled into
-it, so the skill can never be a different version from the tool it describes.
-
-On the Mac, first time:
-
-    git clone git@github.com:guygrigsby/sand.git
-    cd sand
-    make install
+    curl -fsSL https://raw.githubusercontent.com/guygrigsby/sand/main/install.sh | bash
     sand config init     # asks for the box, writes ~/.config/sand/config.yaml
 
-After that, in the Mac's copy, on the branch you want from the box:
+The script picks the binary for the machine it is on, puts it in `~/.local/bin`, and runs it to
+prove the download is not a truncated file. `BIN_DIR` moves where it lands and
+`SAND_VERSION=v0.1.0` pins a release. `sand --version` says which one you have.
 
-    make sync            # fetch that branch from the box, fast forward, install
+Nothing gets installed on the box. The skill its agent reads goes over ssh out of this binary,
+written by `sand new` and both `pull` commands before they hand the box any work.
+`sand skill install --remote` does it on demand, for a box being set up or before ssh'ing in to
+work by hand.
 
-`make sync` takes no argument: it reads the box from `sand config get host`, the same host the
-tool itself uses, so `sand config set host <alias>` moves both. `BOX=<alias>` overrides. It
-fast forwards only, so it stops rather than discarding a branch the Mac has signed; `sand sign`
-is what puts that branch on the box.
-
-Or push from the box, when the Mac accepts ssh: `make ship MAC=user@mac`. That is an rsync with
-`--delete` into `src/sand`, a build copy rather than a checkout.
-
-The box is the canonical source, so never edit the Mac's copy: `sync` refuses to overwrite the
-edit, and nothing downstream of it will accept an uncommitted change anyway.
+Developing `sand` itself is a different thing and lives under [Development](#development): the
+clone, `make sync` and the ring only matter if you are changing the tool. Using it on your own
+repos needs neither.
 
 ## Use
 
@@ -75,7 +65,8 @@ Start an issue from the Mac:
     sand new 1532                 # fetch issue, create its box data dir and switch both checkouts
 
 This writes `issue.md` under `<remote_dir>/<owner>/<repo>/issue-1532/` and creates
-`<you>/1532-<issue-title>` from `origin/main` on the Mac and box. The box agent writes
+`<you>/1532-<issue-title>` from `origin/main` on the Mac and box, and leaves the current skill
+on the box for whichever agent you ask about the issue there. The box agent writes
 `pr-description.md` beside the issue before handoff.
 
 The `<you>` is `branch_prefix`, your `$USER` unless you set it. It is the name `sand up` reads
@@ -146,7 +137,8 @@ and that is a question about trees rather than hashes. A branch with no PR is fi
 already posted stays `status: sent` and is not posted twice.
 
 The files land in `<remote_dir>/<owner>/<repo>/pr-<n>/` on the box: `index.md` plus one
-`c-<comment-id>.md` per thread. An agent on the box reads them through the installed skill.
+`c-<comment-id>.md` per thread. An agent on the box reads them through the skill, which the
+same pull writes there first, so it is never a version behind the tool that started the agent.
 
 `sand ci pull` is the same trip for a red PR: what `gh pr checks` calls failed, plus the tail of
 each Actions run's failed steps, into `pr-<n>/ci/` as one file per check, then an agent on the
@@ -204,17 +196,41 @@ carries a signature. So `sand` fails closed wherever it cannot keep that true.
   branch whose commits are unsigned copies of commits already on the remote.
 - One agent per checkout on the box, under `flock`.
 - Everything that writes anywhere but this Mac takes `--dry-run`: `comments pull`,
-  `comments push`, `ci pull`, `sign`, `up`.
+  `comments push`, `ci pull`, `sign`, `up`, `skill install --remote`.
 - `ci pull` only ever reads from GitHub. Nothing it produces is posted anywhere.
 
 ## Development
 
-Edit in this repo, on the box. Not on the Mac, not over ssh into a deploy target.
+Edit in this repo, on the box. Not on the Mac, not over ssh into a deploy target. Go 1.26+ is a
+requirement here and nowhere else.
 
     make check   # the gate: go vet, gofmt, tests, linux build, darwin/arm64 build
 
-`make check` is what CI would call and what to run before every commit. The darwin build is
-part of it because the Mac is the real target.
+`make check` is what CI calls and what to run before every commit. The darwin build is part of it
+because the Mac is the real target.
+
+The Mac keeps a clone of this repo for one reason, to sign and push what the box wrote:
+
+    make sync            # fetch the current branch from the box, fast forward, install
+
+`make sync` takes no argument: it reads the box from `sand config get host`, the same host the
+tool itself uses, so `sand config set host <alias>` moves both. `BOX=<alias>` overrides. It fast
+forwards only, so it stops rather than discarding a branch the Mac has signed; `sand sign` is what
+puts that branch on the box. Or push from the box, when the Mac accepts ssh: `make ship
+MAC=user@mac`, an rsync with `--delete` into `src/sand`, a build copy rather than a checkout.
+
+The box is the canonical source, so never edit the Mac's copy: `sync` refuses to overwrite the
+edit, and nothing downstream of it will accept an uncommitted change anyway. None of this applies
+to using `sand` on any other repo, where `aif` inside `sand sign` does the importing.
+
+Releases are a signed tag, cut from the Mac:
+
+    make release VERSION=v0.1.0   # make check, git tag -s, push the tag
+
+Pushing the tag is what starts the build: `.github/workflows/release.yml` runs `make check`, then
+`make dist` for both Macs and both linuxes, and attaches the four binaries to the release that
+`install.sh` downloads. The build happens there rather than here so that what ships is the tag as
+GitHub sees it, and the box cannot cut one because it has no credential that can push.
 
 The box has no `gh` and no GitHub API token, so the tests fake both ends: a
 `gh` stub on `PATH` and `SAND_SSH` pointed at a shim that runs the "remote" command locally

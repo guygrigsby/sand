@@ -67,15 +67,21 @@ history on the box. Flags: `--remote` (origin), `--base` (main), `--yes`, `--pus
   `git` called it a divergence of 7 against 13. So a duplicate of merged work is refused with a
   different fix: `git rebase <remote>/<base> <branch>`, which drops what is already upstream by
   patch id, rather than the replay that only moves it.
-- **The recovery it prints runs on the Mac and ends with a push to the box**, in that order, and
-  the order is not a style choice. `aif` resets this checkout to the box's branch at the top of
+- **The recovery runs on the Mac and ends with a push to the box**, in that order, and the
+  order is not a style choice. `aif` resets this checkout to the box's branch at the top of
   every run, so a rebase done here and not pushed to the box is undone by the next `sand sign`
   before it looks at anything. The rebase itself can only happen here: `<remote>/<branch>` is a
-  ref the box has never seen. So the three lines are `git rebase --onto <remote>/<branch>
-  <boundary> <branch>`, a leased push of the result to the box, and `sand sign --push`. The
-  boundary is computed, not left as `<old-head>`: `dirty` is oldest first, so the last commit
-  with a twin is the last one already on the remote, and everything above it is the work that
-  exists nowhere else.
+  ref the box has never seen. So the refusal offers to do it: answer y and the run rebases,
+  pushes the result to the box leased against the head it imported, and keeps signing from the
+  repaired history. Declining (or a non-interactive run, or `--dry-run`) prints the three lines
+  to run by hand: `git rebase --onto <remote>/<branch> <boundary> <branch>`, a leased push of
+  the result to the box, and `sand sign --push`. The boundary is computed, not left as
+  `<old-head>`: `dirty` is oldest first, so the last commit with a twin is the last one already
+  on the remote, and everything above it is the work that exists nowhere else. The repair needs
+  no recovery branch of its own: the pre-rebase history is the box's, and the box still has it
+  until the push replaces it. Afterwards the run recomputes what to sign from the new history
+  and re-checks for twins, because a rebase that kept both sides of a conflict is a refusal
+  again, not a signature.
 - **Only what is unsigned, and what sits on top of it.** Review is a loop, so most runs meet a
   branch that is already partly signed, and re-signing a commit moves its hash, which kills
   every reply already posted quoting it. The already-signed commits go to filter-branch as

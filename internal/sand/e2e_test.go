@@ -307,6 +307,10 @@ func TestPullThenPush(t *testing.T) {
 // asked, answers the thread the way an agent would, and reports in stream-json.
 const fakeAgent = `#!/bin/sh
 { pwd; echo "$@"; } > "$AGENT_LOG"
+# The box has no sand, so the skill it is told to use is only there if pull put it there
+# before starting this. Read it the way the harness would, through the harness's own path.
+grep -q '^name: sand' "$HOME/.claude/skills/sand/SKILL.md" 2>/dev/null &&
+  echo 'the skill was here before the agent'
 for f in "$SAND_PR_DIR"/c-*.md; do
   printf '\n%s\n' "Closed the fd in both paths." >> "$f"
   sed -i 's/^commit: .*/commit: deadbee/' "$f"
@@ -326,6 +330,11 @@ func TestPullStartsTheAgentAndReportsBack(t *testing.T) {
 	// The agent runs in the repo checkout, which on the box is ~/projects/<repo>.
 	checkout := filepath.Join(home, "projects", "r")
 	if err := os.MkdirAll(checkout, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A harness installed on the box, and nothing else: no sand there to install the skill
+	// with, which is the case this covers.
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	agentLog := filepath.Join(home, "agent.log")
@@ -357,7 +366,9 @@ func TestPullStartsTheAgentAndReportsBack(t *testing.T) {
 
 	printed := out()
 	for _, want := range []string{
-		"· Read internal/foo.go", // stream-json turned into progress
+		filepath.Join(home, ".agents", "skills", "sand.md"), // installed over ssh, first run
+		"the skill was here before the agent",               // and before the agent, not after
+		"· Read internal/foo.go",                            // stream-json turned into progress
 		"fixing the leak",
 		"plain line from some other agent", // anything else passes through
 		"Answered 1 thread.",

@@ -82,7 +82,8 @@ remotes can change the answer.
   is the pushed history. Only checked when there is actually a reply to post, so a re-run with
   everything sent stays a no-op, and `--dry-run` warns instead of failing so the preview works.
 - **Every command that writes anywhere but this Mac takes `--dry-run`:** `comments pull`,
-  `comments push`, `ci pull`, `sign`. `skill install` and `config init` write only local files.
+  `comments push`, `ci pull`, `sign`, and `skill install --remote`, which writes the skill on
+  the box. Plain `skill install` and `config init` write only local files.
 - **`push` re-points a `commit:` that signing moved.** The agent on the box commits without a
   key and records that hash; signing then re-creates the commit, so the recorded hash stops
   existing exactly when the branch becomes postable, and every earlier round's replies would
@@ -95,6 +96,13 @@ remotes can change the answer.
   cherry-pick, a merge that brought a copy back) makes it false, so quoting either is a coin
   flip. The corrected hash is written back to the box
   by the front matter rewrite that marks it sent. This is why `push` takes `--remote`.
+- **A 422 on every reply is a pending review on the PR, not a bad thread.** The replies
+  endpoint attaches each reply to a fresh pending review, GitHub allows one pending review
+  per user per PR, and a review draft left unsubmitted in the web UI therefore rejects every
+  reply with `user_id can only have one pending review per pull request`. The draft is
+  visible only to its owner: `gh api repos/{o}/{r}/pulls/{n}/reviews`, check its comments
+  are nothing worth keeping, `DELETE` it, re-run. The sub-error used to be dropped with the
+  rest of the `errors` array; `httpError` now prints it.
 - **`push` rewrites only the front matter** of a file it has posted, so the conversation text
   stays byte-identical to what pull wrote.
 - **"Already posted" is answered by GitHub, not by `status:` on the box.** The POST goes out and
