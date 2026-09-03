@@ -3,6 +3,7 @@ package sand
 import (
 	"cmp"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,20 +15,21 @@ import (
 )
 
 var (
-	flagHost      string
-	flagRemoteDir string
-	flagPR        string
-	flagDryRun    bool
-	flagAll       bool
-	flagRemote    string
-	flagBase      string
-	flagYes       bool
-	flagOtherAuth bool
-	flagPush      bool
-	flagAgent     string
-	flagNoAgent   bool
-	flagRepoDir   string
-	flagLogLines  int
+	flagHost        string
+	flagRemoteDir   string
+	flagPR          string
+	flagDryRun      bool
+	flagAll         bool
+	flagRemote      string
+	flagBase        string
+	flagYes         bool
+	flagOtherAuth   bool
+	flagPush        bool
+	flagAgent       string
+	flagNoAgent     bool
+	flagRepoDir     string
+	flagLogLines    int
+	flagSkillRemote bool
 )
 
 // betweenPosts is a base courtesy delay between reply POSTs. The replies endpoint sends
@@ -386,12 +388,18 @@ func skillCmd() *cobra.Command {
 	install := &cobra.Command{
 		Use:   "install",
 		Short: "Write the skill and link the agent harnesses at it",
-		Long: "Run on the box. Writes the skill this binary carries to ~/" + canonicalSkillPath + "\n" +
-			"and links every agent harness installed there at it, so one file serves all of\n" +
-			"them and a re-install after an upgrade updates all of them. No checkout needed.",
+		Long: "Writes the skill this binary carries to ~/" + canonicalSkillPath + " and links\n" +
+			"every agent harness installed there at it, so one file serves all of them and a\n" +
+			"re-install after an upgrade updates all of them. No checkout needed.\n\n" +
+			"--remote does the same on the box over ssh, which is the way the box gets it:\n" +
+			"there is no sand there to run. Every `comments pull` and `ci pull` does this\n" +
+			"before it starts an agent, so running it by hand is for a box you are setting up\n" +
+			"or a skill you want current before ssh'ing in yourself.",
 		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error { return runSkillInstall() },
+		RunE: func(cmd *cobra.Command, args []string) error { return runSkillInstall(cmd.OutOrStdout()) },
 	}
+	install.Flags().BoolVar(&flagSkillRemote, "remote", false, "install on the box over ssh instead of here")
+	install.Flags().BoolVar(&flagDryRun, "dry-run", false, "say what would be installed, write nothing")
 	show := &cobra.Command{
 		Use:   "show",
 		Short: "Print the skill this binary carries",
@@ -405,7 +413,25 @@ func skillCmd() *cobra.Command {
 	return c
 }
 
-func runSkillInstall() error {
+func runSkillInstall(out io.Writer) error {
+	if flagSkillRemote {
+		cfg, err := Resolve(flagHost, flagRemoteDir)
+		if err != nil {
+			return err
+		}
+		if flagDryRun {
+			fmt.Fprintf(out, "dry run: would write %s:~/%s and link the harnesses installed there\n",
+				cfg.Host, canonicalSkillPath)
+			return nil
+		}
+		got, err := InstallSkillRemote(cfg.Host)
+		if err != nil {
+			return err
+		}
+		reportSkill(out, cfg.Host, got)
+		return nil
+	}
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
@@ -418,15 +444,60 @@ func runSkillInstall() error {
 		}
 		// The version, because the skill is text out of one particular binary: when the box
 		// side and the tool disagree, this line is what says which `sand` wrote the file.
-		fmt.Printf("%s (%s, from sand %s)\n", got.Path, state, Version())
+		fmt.Fprintf(out, "%s (%s, from sand %s)\n", got.Path, state, Version())
 	}
 	for _, l := range got.Links {
-		fmt.Println(l, "->", got.Path)
+		fmt.Fprintln(out, l, "->", got.Path)
 	}
 	for _, h := range got.Absent {
-		fmt.Printf("%s not installed here (no ~/%s), not linked\n", h.Name, h.marker)
+		fmt.Fprintf(out, "%s not installed here (no ~/%s), not linked\n", h.Name, h.marker)
 	}
 	return err
+}
+
+// reportSkill prints a remote install the way the local one prints, with the host in front of
+// every path: the paths are the box's, and a line that does not say so reads as this Mac's.
+func reportSkill(out io.Writer, host string, got RemoteSkill) {
+	state := "unchanged"
+	if got.Updated {
+		state = "written"
+	}
+	fmt.Fprintf(out, "%s:%s (%s, from sand %s)\n", host, got.Path, state, Version())
+	for _, l := range got.Linked {
+		fmt.Fprintf(out, "%s:%s -> %s\n", host, l, got.Path)
+	}
+	for _, l := range got.Current {
+		fmt.Fprintf(out, "%s:%s (already linked)\n", host, l)
+	}
+	for _, name := range got.Absent {
+		fmt.Fprintf(out, "%s not installed on %s, not linked\n", name, host)
+	}
+}
+
+// ensureRemoteSkill puts the current skill on the box before an agent there is told to use it.
+// Every pull does it, and it is why the box needs no sand: the skill cannot install itself
+// there, nothing there can notice the text has moved on, and the alternative is an agent
+// working a review with instructions from whichever release someone last downloaded. The
+// binary that writes the prompt writes the skill, in the same command, so they are one version.
+//
+// Quiet unless something changed, which is every run after the first. Fatal when it fails,
+// because the prompt's first sentence is "use the sand skill" and an agent that cannot is one
+// that edits a checkout it has not been told the rules of.
+func ensureRemoteSkill(cfg Config, out io.Writer) error {
+	got, err := InstallSkillRemote(cfg.Host)
+	if err != nil {
+		return err
+	}
+	if got.Changed() {
+		reportSkill(out, cfg.Host, got)
+	}
+	if len(got.Absent) == len(harnesses) {
+		// The file is there and nothing reads it. The agent still starts, since it may be
+		// reachable over a PATH this check knows nothing about, but it starts uninstructed.
+		warn(fmt.Sprintf("no agent harness on %s has a skills directory (%s), so the skill is "+
+			"installed but nothing there will load it", cfg.Host, strings.Join(harnessNames(), ", ")))
+	}
+	return nil
 }
 
 func commentsCmd() *cobra.Command {
@@ -644,6 +715,9 @@ func runCIPull(args []string) error {
 		return nil
 	}
 
+	if err := ensureRemoteSkill(cfg, os.Stdout); err != nil {
+		return err
+	}
 	fmt.Printf("\nstarting the agent in %s:%s, Ctrl-C to stop it\n\n", cfg.Host, run.Dir)
 	agentErr := RunAgent(run)
 	// Either way: an agent that died halfway may still have fixed most of them, and which
@@ -1046,6 +1120,9 @@ func runPull(args []string) error {
 		return nil
 	}
 
+	if err := ensureRemoteSkill(cfg, os.Stdout); err != nil {
+		return err
+	}
 	fmt.Printf("\nstarting the agent in %s:%s, Ctrl-C to stop it\n\n", cfg.Host, run.Dir)
 	agentErr := RunAgent(run)
 	// Report either way: the agent may have answered most of the threads before it died,

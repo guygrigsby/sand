@@ -112,6 +112,12 @@ func runNew(args []string) error {
 	if err := g.run("switch", "-c", branch, flagRemote+"/"+flagBase); err != nil {
 		return err
 	}
+	// Nobody starts an agent for an issue: a person ssh's in and asks one. So this is the
+	// command that has to leave the skill current there, or that agent reads issue.md with no
+	// idea what the ring is, and pushes.
+	if err := ensureRemoteSkill(cfg, os.Stdout); err != nil {
+		return err
+	}
 	fmt.Printf("%s #%d → %s:%s\nbranch: %s\n", issue.Slug(), issue.Number, cfg.Host, remotePath, branch)
 	return nil
 }

@@ -8,6 +8,12 @@ locally (`internal/sand/e2e_test.go`). That covers the GraphQL decode, the file 
 both directions, the merge on re-pull, the reply POST and the sent marking. What it cannot cover
 is GitHub itself: claims about real API behaviour need a run on the Mac against a real PR.
 
+The shim earns its keep twice over on the remote skill install, where the decisions are in shell
+on the box rather than in Go here: with `HOME` pointed at a temp directory, `skill_test.go` runs
+the real script against a real filesystem, and the fake agent in the e2e test reads the skill
+through the harness's own path, which is the assertion that a pull installs it ahead of the
+agent rather than after it.
+
 `install.sh` is tested too (`internal/sand/install_test.go`), by serving a fake release over
 localhost through `SAND_BASE_URL` and running the real script against it. Everything a coworker
 depends on is after the download: that the platform mapping names an asset, that the file lands

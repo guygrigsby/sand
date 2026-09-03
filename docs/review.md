@@ -82,7 +82,8 @@ remotes can change the answer.
   is the pushed history. Only checked when there is actually a reply to post, so a re-run with
   everything sent stays a no-op, and `--dry-run` warns instead of failing so the preview works.
 - **Every command that writes anywhere but this Mac takes `--dry-run`:** `comments pull`,
-  `comments push`, `ci pull`, `sign`. `skill install` and `config init` write only local files.
+  `comments push`, `ci pull`, `sign`, and `skill install --remote`, which writes the skill on
+  the box. Plain `skill install` and `config init` write only local files.
 - **`push` re-points a `commit:` that signing moved.** The agent on the box commits without a
   key and records that hash; signing then re-creates the commit, so the recorded hash stops
   existing exactly when the branch becomes postable, and every earlier round's replies would

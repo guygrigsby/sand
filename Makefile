@@ -7,8 +7,9 @@ MOD := github.com/guygrigsby/sand
 VERSION ?=
 LDFLAGS := $(if $(VERSION),-ldflags "-X $(MOD)/internal/sand.version=$(VERSION)",)
 
-# What a release ships. Two Macs because coworkers have both, and two linuxes because the box
-# needs one for `sand skill install` and boxes come in both arches.
+# What a release ships. Two Macs because coworkers have both, and two linuxes because the
+# driving machine is not always a Mac. The box needs none of them: it gets the skill over ssh
+# and runs nothing of this tool.
 PLATFORMS := darwin/arm64 darwin/amd64 linux/amd64 linux/arm64
 
 # The box for sync comes from sand's own config, so it is named in exactly one place and

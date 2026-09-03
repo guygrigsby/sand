@@ -30,27 +30,30 @@ On the Mac:
   post replies quoting them.
 - ssh to the box, by whatever alias you give `sand config init`
 
-On the box: a checkout of each repo under `~/projects/<repo>`, and an agent
-CLI (`claude` or `pi`) with the box-side skill installed, findable over ssh. `ssh box '<cmd>'` gets none of an
+On the box: a checkout of each repo under `~/projects/<repo>`, and an agent CLI (`claude` or
+`pi`), findable over ssh. No `sand` there and nothing to install: the skill that agent works
+from is compiled into the Mac's binary and written over ssh by `sand new` and every `pull`, so
+it is always the version of the tool that started the run. `ssh box '<cmd>'` gets none of an
 interactive shell's PATH, so a harness that only `.zshrc` puts on PATH is not there when `pull`
 looks for it; `~/.local/bin`, `~/bin` and `~/go/bin` are added for you, `~/.zshenv` covers the
 rest. `pull` says which binary it could not find rather than starting nothing quietly.
 
 ## Install
 
-Two commands, on the Mac and again on the box:
+Two commands, on the Mac only:
 
     curl -fsSL https://raw.githubusercontent.com/guygrigsby/sand/main/install.sh | bash
     sand config init     # asks for the box, writes ~/.config/sand/config.yaml
 
-The script picks the binary for the machine it is on, puts it in `~/.local/bin`, runs it to prove
-the download is not a truncated file, and on a machine with an agent harness installed also runs
-`sand skill install`, so the box takes the same two commands as the Mac. `BIN_DIR` moves where it
-lands and `SAND_VERSION=v0.1.0` pins a release. `sand --version` says which one you have.
+The script picks the binary for the machine it is on, puts it in `~/.local/bin`, and runs it to
+prove the download is not a truncated file. `BIN_DIR` moves where it lands and
+`SAND_VERSION=v0.1.0` pins a release. `sand --version` says which one you have.
 
-The box needs the binary only for the skill: the skill text is compiled into `sand`, so it can
-never be a different version from the tool it describes, and the box needs no checkout of this
-repo to install it.
+Nothing gets installed on the box. The skill its agent reads is compiled into this binary and
+goes over ssh: `sand new` and both `pull` commands write it there before they hand the box any
+work, so it can never be a different version from the tool that started the run, and it needs
+no release download, no checkout and no `make` over there. `sand skill install --remote` does
+it on demand, for a box being set up or before ssh'ing in to work by hand.
 
 Developing `sand` itself is a different thing and lives under [Development](#development): the
 clone, `make sync` and the ring only matter if you are changing the tool. Using it on your own
@@ -63,7 +66,8 @@ Start an issue from the Mac:
     sand new 1532                 # fetch issue, create its box data dir and switch both checkouts
 
 This writes `issue.md` under `<remote_dir>/<owner>/<repo>/issue-1532/` and creates
-`<you>/1532-<issue-title>` from `origin/main` on the Mac and box. The box agent writes
+`<you>/1532-<issue-title>` from `origin/main` on the Mac and box, and leaves the current skill
+on the box for whichever agent you ask about the issue there. The box agent writes
 `pr-description.md` beside the issue before handoff.
 
 The `<you>` is `branch_prefix`, your `$USER` unless you set it. It is the name `sand up` reads
@@ -134,7 +138,8 @@ and that is a question about trees rather than hashes. A branch with no PR is fi
 already posted stays `status: sent` and is not posted twice.
 
 The files land in `<remote_dir>/<owner>/<repo>/pr-<n>/` on the box: `index.md` plus one
-`c-<comment-id>.md` per thread. An agent on the box reads them through the installed skill.
+`c-<comment-id>.md` per thread. An agent on the box reads them through the skill, which the
+same pull writes there first, so it is never a version behind the tool that started the agent.
 
 `sand ci pull` is the same trip for a red PR: what `gh pr checks` calls failed, plus the tail of
 each Actions run's failed steps, into `pr-<n>/ci/` as one file per check, then an agent on the

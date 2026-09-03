@@ -177,16 +177,15 @@ of a thread.
 
 ## This file
 
-It lives at `~/.agents/skills/sand.md`, written there by `sand skill install` out of the `sand`
-binary; what you are reading may be a symlink to it from a harness skill directory. Editing
-either is pointless, the next install overwrites it. The text ships with the tool and changes
-when the tool changes, so if it disagrees with how `sand` actually behaves, the binary is newer
-than the install: re-run `sand skill install`.
+It lives at `~/.agents/skills/sand.md`, and what you are reading may be a symlink to it from a
+harness skill directory. The Mac writes it there over ssh: the text is compiled into `sand`, and
+`sand new`, `sand comments pull` and `sand ci pull` each install it before they hand this box
+any work, so it is the same version as the tool that wrote the prompt you were started with.
 
-`sand skill install` prints the version it wrote the file from, and `sand --version` says what
-this box has. That is the check when the two disagree. The binary here comes from a release
-(`curl -fsSL https://raw.githubusercontent.com/guygrigsby/sand/main/install.sh | bash`, which
-installs the skill too), so upgrading is that one command and needs no checkout of `sand`.
+Nothing about it is yours to maintain. There is no `sand` on this box to re-install it with,
+this repo needs no checkout here, and editing the file or its link is pointless because the next
+pull overwrites it. If it disagrees with what actually happens, say so and stop rather than
+working around it; the fix is `sand skill install --remote` on the Mac, and it is one command.
 
 ## Multiple PRs
 
