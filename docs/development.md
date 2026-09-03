@@ -2,6 +2,12 @@
 
 `make check` is the gate: `go vet`, `gofmt`, tests, a linux build and the darwin/arm64 build.
 
+`bench_test.go` holds the benchmarks, which the gate does not run (`go test ./internal/sand/
+-run xxx -bench .` does). They all measure the same thing: reading a branch. Every way of
+getting that wrong is one `git` process per commit, which is invisible on the three-commit
+branches the tests use and linear in the real ones, so the benchmarks build a 60-commit branch
+and the numbers in `docs/signing.md` come from them.
+
 There is no `gh` and no GitHub API token on the box, and its git credential is read only, so the
 tests fake both ends: a `gh` stub on `PATH` and `SAND_SSH` pointed at a shim that runs the "remote" command
 locally (`internal/sand/e2e_test.go`). That covers the GraphQL decode, the file format, tar in

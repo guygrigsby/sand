@@ -58,9 +58,32 @@ func root() *cobra.Command {
 	}
 	c.PersistentFlags().StringVar(&flagHost, "host", "", "sandbox ssh alias or user@host (overrides config)")
 	c.PersistentFlags().StringVar(&flagRemoteDir, "remote-dir", "", "base dir on the sandbox (overrides config)")
-	c.AddCommand(ciCmd(), commentsCmd(), configCmd(), newCmd(), shotCmd(), signCmd(), skillCmd(),
-		statusCmd(), upCmd())
+	c.AddCommand(ciCmd(), commentsCmd(), configCmd(), initCmd(), newCmd(), shotCmd(), signCmd(),
+		skillCmd(), statusCmd(), upCmd())
 	return c
+}
+
+// initCmd is the whole setup, and the only command a new Mac needs to be told about. `sand
+// config init` is still there and still writes only the file, which is what a script wants;
+// this is what a person wants.
+func initCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "init",
+		Short: "Set this Mac up: ask for the config, then check and fix what is left",
+		Long: "Asks for every config key, showing what an empty answer keeps, writes the file,\n" +
+			"then checks everything else the loop needs and says what is missing with the\n" +
+			"command that fixes it:\n\n" +
+			"  gh        installed and authenticated, since it holds the only GitHub credential\n" +
+			"  signing   a key configured here, and the same key on your GitHub account\n" +
+			"  repo      this checkout has the remote signing pushes to\n" +
+			"  box       ssh answers, its checkout is readable, and the skill is installed there\n\n" +
+			"It writes two things: this Mac's config file, and the skill on the box. Everything\n" +
+			"else it reports. Re-running keeps every answer and re-checks the rest.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return Init(InitOpts{Host: flagHost, In: cmd.InOrStdin(), Out: cmd.OutOrStdout()})
+		},
+	}
 }
 
 func shotCmd() *cobra.Command {
@@ -287,7 +310,7 @@ func signCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "sign [branch]",
 		Short: "Sign the commits a sandbox branch adds, on the Mac",
-		Long: "Imports the branch with aif, then re-creates every commit unique to it with a\n" +
+		Long: "Fetches the branch from the box, then re-creates every commit unique to it with a\n" +
 			"signature, preserving the commit graph including merges. Verifies that every\n" +
 			"rewritten commit is signed and that none went missing before offering to push.\n" +
 			"Leaves a recovery branch behind either way.\n\n" +
@@ -1199,6 +1222,7 @@ func runPush(args []string) error {
 	// Only worth checking when there is something to post.
 	g := gitCmd{out: os.Stdout}
 	branchRef := ""
+	var branch *branchIndex
 	// What this account has already posted, per thread. The box's `status: sent` is a
 	// cache of this and can be lost (see the posted map below), so GitHub is asked.
 	posted := map[int64][]string{}
@@ -1226,6 +1250,9 @@ func runPush(args []string) error {
 			// would condemn perfectly good commits. Offline, this fails and the checks
 			// below degrade to "cannot say".
 			_, _ = g.capture("fetch", "--quiet", flagRemote)
+			// Read once, here, rather than once per reply: every recorded hash is matched
+			// against the same branch, and a round answers several threads.
+			branch = newBranchIndex(g, branchRef)
 		}
 	}
 
@@ -1255,7 +1282,7 @@ func runPush(args []string) error {
 		} else if branchRef != "" {
 			// The box had no key, so what the agent wrote down is the hash of an unsigned
 			// commit that signing has since replaced.
-			switch h, state := commitOnBranch(g, t.Meta.Commit, branchRef); state {
+			switch h, state := commitOnBranch(g, t.Meta.Commit, branch); state {
 			case commitMoved:
 				fmt.Printf("%s: signing moved %s to %s\n", name, t.Meta.Commit, h)
 				t.Meta.Commit = h

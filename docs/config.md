@@ -11,10 +11,74 @@ spelling. An empty model is a real answer: the harness picks, which is the only 
 not go stale every time a model ships. Neither has a flag, because only `pull` reads them and it
 already has `--agent` for a one-off.
 
-`sand config` prints the file, `sand config init` creates or updates it, `sand config set <key>
-<value>...` sets any key, and `sand config get <key>` prints one effective value and nothing
-else, for scripts and the Makefile (`get` applies env and the defaults; `config` only shows what
-the file says).
+`sand init` is what a person runs: it asks for every key, then checks the rest of the setup and
+names what is missing (see below). `sand config` prints the file, `sand config init` creates or
+updates it and nothing else, `sand config set <key> <value>...` sets any key, and `sand config
+get <key>` prints one effective value and nothing else, for scripts and the Makefile (`get`
+applies env and the defaults; `config` only shows what the file says).
+
+## `sand init`, the one command a new Mac needs
+
+Setup was seven things in five places, and the seventh was always the one nobody ran: the config
+file, `gh auth login`, a signing key, that same key added to the GitHub account *as a signing
+key*, ssh to the box, a checkout there, and the skill written into it. Every one of them was
+discovered by a command failing part way through a review round, which is the most expensive
+moment to learn it.
+
+So `init` asks the config questions and then answers the rest of the list in one run: `gh`
+installed and authenticated (`ViewerLogin`, so the answer is a name and not just an exit code),
+a signing key here and the same key on the account, this checkout's `origin`, ssh to the box, a
+box checkout `git` can read (`boxCurrentBranch`, the same call signing uses), and the harness
+`pull` would start being present there.
+
+- **The signing check is two halves for ssh and three for gpg, because that is what GitHub
+  looks at.** Signed-but-unverified is the state `up` stops on at step 3, with the replies
+  unposted, and it is easy to reach because only the local half is visible locally: `git log
+  --show-signature` is happy, the keyring is happy, and GitHub is not. For an ssh key the
+  account either has those bytes as a *signing* key or it does not (`user/ssh_signing_keys`,
+  matched on the base64 field, since the comment differs per machine). For gpg there is a third
+  half: GitHub only calls the commit verified when the committer's address is one it has
+  verified **on that key**, so a key that is on the account with the wrong address on it
+  verifies nothing, and neither machine says so. The check names what the key does list.
+- **The gpg match is by suffix, in both directions.** A gpg key is not one key and not one name
+  for itself: the signature may come from a subkey, `user.signingkey` may hold a short id, a
+  long id, a fingerprint or a `!`-pinned subkey, and GitHub's `key_id` is documented only as
+  "a string" (it returns the 16-hex long id today). So both sides are collected as sets of
+  names — `parseGPGColons` takes the long ids and fingerprints of the primary and every subkey
+  out of `gpg --with-colons` — and `sameGPGKey` accepts a suffix either way, refusing anything
+  under eight characters as a coincidence rather than a name. Expiry and revocation are read
+  off GitHub's answer too, and an unparseable timestamp is not expired: a wrong "expired" sends
+  someone to fix a key that works.
+- **An empty `user.signingkey` is a gap for ssh and normal for gpg.** ssh signing has no keyring
+  to search, so git refuses outright; gpg signs with the secret key matching `user.email`, which
+  is how the common setup is configured. Keying the check on `user.signingkey` alone reported a
+  working gpg Mac as having no signing key.
+- **It writes two things: this Mac's config file, and the skill on the box.** Everything else it
+  reports. A setup command that installs a signing key, logs a `gh` in or clones a repo on
+  another machine is a setup command doing things nobody asked for, in places nobody asked
+  about.
+- **The prompts are generated from `Config`'s fields**, like the file rendering and `set`, so a
+  new key is a key `init` asks about with no second list to update. Enter keeps what the file
+  has, and an accepted default is written as empty, never as today's default: `harness: claude`
+  in the file is indistinguishable from a chosen value and would freeze the default on this
+  machine forever.
+- **The checks run concurrently and print in a fixed order.** Every one of them is round trips:
+  three to GitHub, three to the box over ssh, and serially a run costs the sum of every latency
+  between here and two other machines. Against stubs at 250ms a call that was 1.28s, and 517ms
+  concurrent. Each check writes into its own buffer (`concurrently`, `gaps.absorb`) and the
+  buffers print in the order they were listed, so the output does not depend on which answer
+  arrived first — a diagnose command whose lines move around is one nobody can compare against
+  the last run. `TestConcurrentChecksPrintInTheOrderListed` is that invariant.
+- **Every gap is collected, not just the first.** They are independent, and a command that
+  reports one per run is a command run four times. Each prints as it is found and again in a
+  numbered summary at the end, because the fixes are what happens next and scrolling back for
+  them is what makes people skip one.
+- **`host` is asked twice if it has to be.** It is the one key with no default and the one
+  everything else needs, so an empty first answer gets a second question saying so. An
+  unattended run (no tty, EOF) still writes the file and warns, rather than blocking on a
+  prompt nobody will answer.
+- **Re-running is the point.** It keeps every answer and re-checks everything, so it doubles as
+  the "why has this stopped working" command.
 
 `set` and `init` both render the whole file from the struct: the keys, their order and the
 settable list all come from `Config`'s yaml tags (`configFields`), with the per-key comments in

@@ -10,9 +10,10 @@ import (
 )
 
 // signRepo builds a repository that looks like the Mac's after a sandbox branch landed: a
-// pushed main, a feature branch with unsigned commits and a merge commit, an ssh signing
-// key, and an aif that has nothing left to do because the branch is already here.
-func signRepo(t *testing.T) (dir, remote string) {
+// pushed main, a feature branch with unsigned commits and a merge commit, and an ssh signing
+// key. No box, so the import has nothing to do and the branch signed is the one here; the
+// tests that care about the box pass one in.
+func signRepo(t testing.TB) (dir, remote string) {
 	t.Helper()
 	if _, err := exec.LookPath("ssh-keygen"); err != nil {
 		t.Skip("ssh-keygen not available, cannot sign")
@@ -49,18 +50,11 @@ func signRepo(t *testing.T) (dir, remote string) {
 	mustRun(t, dir, "git", "switch", "--quiet", "feature")
 	mustRun(t, dir, "git", "merge", "--quiet", "--no-ff", "-m", "feature: merge side", "feature-side")
 
-	// aif is required and must be found; here the branch is already local, so a stub that
-	// does nothing is the honest fake.
-	aif := filepath.Join(root, "aif")
-	if err := os.WriteFile(aif, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("SAND_AIF", aif)
 	t.Chdir(dir)
 	return dir, remote
 }
 
-func mustRun(t *testing.T, dir string, name string, args ...string) string {
+func mustRun(t testing.TB, dir string, name string, args ...string) string {
 	t.Helper()
 	c := exec.Command(name, args...)
 	c.Dir = dir
@@ -71,7 +65,7 @@ func mustRun(t *testing.T, dir string, name string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-func commit(t *testing.T, dir, file, body, message string) {
+func commit(t testing.TB, dir, file, body, message string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, file), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
@@ -84,35 +78,209 @@ func signOpts(out *strings.Builder, answer string) SignOpts {
 	return SignOpts{Remote: "origin", Base: "main", Yes: true, In: strings.NewReader(answer), Out: out}
 }
 
-// `sand sign push`, a slip for `sand sign --push`, reached aif as the branch name and aif read
-// it as its own push subcommand: this machine's HEAD went to the box before git ever said
-// "invalid reference: push". A name nothing can resolve does not get handed over.
+// `sand sign push`, a slip for `sand sign --push`, once reached `aif` as the branch name and aif
+// read it as its own push subcommand: this machine's HEAD went to the box before git ever said
+// "invalid reference: push". The import is a fetch now and cannot do that, but a name nothing can
+// resolve still gets a refusal that names it rather than a failed fetch of a typo.
 func TestSignRefusesABranchNothingHas(t *testing.T) {
 	dir, _ := signRepo(t)
-	ran := filepath.Join(dir, "aif-ran")
-	aif := filepath.Join(t.TempDir(), "aif")
-	if err := os.WriteFile(aif, []byte("#!/bin/sh\ntouch "+ran+"\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("SAND_AIF", aif)
+	box := boxRepo(t, dir, "feature")
+	before := mustRun(t, dir, "git", "rev-parse", "HEAD")
 
 	var out strings.Builder
 	o := signOpts(&out, "")
-	o.Branch = "push"
+	o.Branch, o.Box = "push", box
 	_, err := Sign(o)
 	if err == nil || !strings.Contains(err.Error(), "no branch push") {
 		t.Fatalf("want a refusal naming the branch, got %v\n%s", err, out.String())
 	}
-	if _, statErr := os.Stat(ran); statErr == nil {
-		t.Error("aif was run with a name that is not a branch")
+	if after := mustRun(t, dir, "git", "rev-parse", "HEAD"); after != before {
+		t.Errorf("HEAD moved from %s to %s on a name nothing has", short(before), short(after))
 	}
+}
+
+// The import is the reason signing talks to the box before it reads anything: what gets signed
+// is the box's branch, not whatever this checkout was left on. This was `aif`, which reached the
+// box through a git remote named `ai` and refused to sign in any checkout that did not have one.
+func TestSignImportsTheBoxsBranch(t *testing.T) {
+	dir, _ := signRepo(t)
+	// The box as it is, not a bare stand-in: the branch is checked out there, which is what the
+	// import has to be able to read from and the realignment has to be able to write into.
+	box := boxWorkingCheckout(t, dir, "feature")
+	for _, kv := range [][2]string{
+		{"user.name", "Box Agent"},
+		{"user.email", "sand@example.invalid"}, // the Mac's identity, or signing refuses the commit
+		{"receive.denyCurrentBranch", "updateInstead"},
+	} {
+		mustRun(t, box, "git", "config", kv[0], kv[1])
+	}
+
+	// The agent answers one more thread over there, and the Mac has never seen it. The Mac is
+	// then moved off the branch entirely, so nothing here has anything to sign unless the
+	// import brings the box's copy over.
+	commit(t, box, "c.txt", "c\n", "feature: c, only on the box")
+	boxHead := mustRun(t, box, "git", "rev-parse", "feature")
+	mustRun(t, dir, "git", "switch", "--quiet", "main")
+
+	var out strings.Builder
+	o := signOpts(&out, "")
+	o.Branch, o.Push, o.Box = "feature", true, box
+	res, err := Sign(o)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	if res.Total != 4 || res.Rewritten != 4 {
+		t.Errorf("signed %d of %d commit(s), want 4 of 4: the box's tip was %s\n%s",
+			res.Rewritten, res.Total, short(boxHead), out.String())
+	}
+	if signed := mustRun(t, dir, "git", "log", "--format=%s", "feature", "--not", "origin/main"); !strings.Contains(signed, "only on the box") {
+		t.Errorf("the commit only the box had was not signed:\n%s", signed)
+	}
+	if !res.BoxAligned {
+		t.Errorf("BoxAligned false after importing from the box and pushing back\n%s", out.String())
+	}
+	if got := mustRun(t, box, "git", "rev-parse", "feature"); got != res.Head {
+		t.Errorf("box is at %s, want the signed %s", short(got), short(res.Head))
+	}
+}
+
+// `sand sign --push` with this checkout on one branch and the box on another signed, force
+// pushed and realigned a branch nobody was working on, without a question, because the Mac's
+// current branch is only a guess at what the round is about. No branch named means the two have
+// to agree, and the flags that skip questions do not skip this one.
+func TestSignRefusesToGuessBetweenTwoBranches(t *testing.T) {
+	dir, _ := signRepo(t)
+	box := boxRepo(t, dir, "feature")
+	mustRun(t, dir, "git", "push", "--quiet", box, "main")
+	mustRun(t, dir, "git", "--git-dir", box, "symbolic-ref", "HEAD", "refs/heads/main")
+	before := mustRun(t, dir, "git", "rev-parse", "feature")
+
+	var out strings.Builder
+	o := signOpts(&out, "") // Yes and, below, Push: the flags that skip every other question
+	o.Push, o.Box = true, box
+	_, err := Sign(o)
+	if err == nil {
+		t.Fatalf("signed the branch this checkout happened to be on\n%s", out.String())
+	}
+	for _, want := range []string{"this checkout is on feature", "box is on main", "sand sign main"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not mention %q: %v", want, err)
+		}
+	}
+	if after := mustRun(t, dir, "git", "rev-parse", "feature"); after != before {
+		t.Errorf("history moved anyway: %s → %s", short(before), short(after))
+	}
+	if refs := mustRun(t, dir, "git", "for-each-ref", "refs/remotes/origin/feature"); refs != "" {
+		t.Errorf("pushed the guess: %q", refs)
+	}
+
+	// Naming the branch is the way to say which one you meant, so it is not blocked by the
+	// disagreement it resolves.
+	out.Reset()
+	o.Branch = "feature"
+	if _, err := Sign(o); err != nil {
+		t.Fatalf("named branch refused as well: %v\n%s", err, out.String())
+	}
+}
+
+// The import moves this checkout's branch to the box's copy, and when that is backwards, what
+// was here goes somewhere with a name. The reflog is not something to have to think of at the
+// moment you notice a commit missing, so the run leaves a branch and says so.
+func TestSignKeepsWhatTheImportTakesOffTheBranch(t *testing.T) {
+	dir, _ := signRepo(t)
+	box := boxRepo(t, dir, "feature")
+
+	// A commit made on the Mac, which is the machine that does not write code: a hand-made
+	// commit, or a signed round whose realignment never reached the box.
+	commit(t, dir, "mac.txt", "mac\n", "feature: e, only on the Mac")
+	macOnly := mustRun(t, dir, "git", "rev-parse", "feature")
+
+	var out strings.Builder
+	o := signOpts(&out, "")
+	o.Box = box
+	res, err := Sign(o)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+
+	kept := mustRun(t, dir, "git", "branch", "--list", "--format=%(refname:short)", "feature-before-import-*")
+	if kept == "" {
+		t.Fatalf("nothing kept the commit only this checkout had (%s):\n%s", short(macOnly), out.String())
+	}
+	if head := mustRun(t, dir, "git", "rev-parse", kept); head != macOnly {
+		t.Errorf("%s is at %s, want the pre-import %s", kept, short(head), short(macOnly))
+	}
+	if !strings.Contains(out.String(), "kept as "+kept) {
+		t.Errorf("output does not say where the commit went:\n%s", out.String())
+	}
+	if signed := mustRun(t, dir, "git", "log", "--format=%s", "feature", "--not", "origin/main"); strings.Contains(signed, "only on the Mac") {
+		t.Errorf("signed a commit the box does not have:\n%s", signed)
+	}
+	if res.Total != 3 {
+		t.Errorf("signed %d commit(s) unique to the branch, want the box's 3\n%s", res.Total, out.String())
+	}
+}
+
+// A box that is configured and cannot hand the branch over is a stop. Signing the stale local
+// copy instead is how the Mac ends up pushing a lineage the box has never had, which is the
+// state the whole realignment exists to stay out of.
+//
+// The two ways it fails need telling apart, because the next move is a different one and git
+// answers "exit status 128" to both: an unreachable box is the tailnet or the alias, a box
+// without the branch is the branch.
+func TestSignRefusesWhenTheBoxCannotHandTheBranchOver(t *testing.T) {
+	t.Run("the box does not answer", func(t *testing.T) {
+		dir, _ := signRepo(t)
+		before := mustRun(t, dir, "git", "rev-parse", "feature")
+
+		var out strings.Builder
+		o := signOpts(&out, "")
+		o.Box = filepath.Join(t.TempDir(), "no-such-box.git")
+		_, err := Sign(o)
+		if err == nil {
+			t.Fatalf("signed without the box\n%s", out.String())
+		}
+		for _, want := range []string{"did not answer", "nothing was signed", "sand config get host"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error does not mention %q: %v", want, err)
+			}
+		}
+		if after := mustRun(t, dir, "git", "rev-parse", "feature"); after != before {
+			t.Errorf("history moved anyway: %s → %s", short(before), short(after))
+		}
+	})
+
+	// The box answers and has never heard of the branch, which is a name that was never created
+	// there rather than a machine that is down.
+	t.Run("the box has no such branch", func(t *testing.T) {
+		dir, _ := signRepo(t)
+		before := mustRun(t, dir, "git", "rev-parse", "feature")
+
+		var out strings.Builder
+		o := signOpts(&out, "")
+		// Named, because a box holding only main is also a box on a different branch than this
+		// checkout, and that stop comes first; naming the branch is what says which was meant.
+		o.Branch, o.Box = "feature", boxRepo(t, dir, "main")
+		_, err := Sign(o)
+		if err == nil {
+			t.Fatalf("signed a branch the box does not have\n%s", out.String())
+		}
+		for _, want := range []string{"no branch feature", "sand new"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error does not mention %q: %v", want, err)
+			}
+		}
+		if after := mustRun(t, dir, "git", "rev-parse", "feature"); after != before {
+			t.Errorf("history moved anyway: %s → %s", short(before), short(after))
+		}
+	})
 }
 
 // boxRepo stands in for the box's checkout, holding the branch at the commit the Mac has just
 // imported. Bare, because what the realignment has to get right is the ref; a real box also has
 // a working tree, and following it is receive.denyCurrentBranch=updateInstead's job rather than
 // anything this code does.
-func boxRepo(t *testing.T, dir, branch string) string {
+func boxRepo(t testing.TB, dir, branch string) string {
 	t.Helper()
 	box := filepath.Join(t.TempDir(), "box.git")
 	mustRun(t, dir, "git", "init", "--quiet", "--bare", box)
@@ -120,11 +288,26 @@ func boxRepo(t *testing.T, dir, branch string) string {
 	return box
 }
 
+// boxAtURL is the box as the commands address it rather than as a test hands it to SignOpts:
+// `<host>:projects/<repo>`, which the Mac reaches over real ssh. git's own `insteadOf` rewrite
+// points that URL at a local repository, so the import and the realigning push run for what they
+// are in a test that has no second machine. `SAND_SSH` cannot do this job: it is sand's own ssh
+// and git never reads it.
+func boxAtURL(t testing.TB, dir, branch string) string {
+	t.Helper()
+	box := boxRepo(t, dir, branch)
+	// The real box has that branch checked out, and its HEAD is what says which round is
+	// under way, so the stand-in claims it too.
+	mustRun(t, dir, "git", "--git-dir", box, "symbolic-ref", "HEAD", "refs/heads/"+branch)
+	mustRun(t, dir, "git", "config", "url."+box+".insteadOf", "box:projects/"+filepath.Base(dir))
+	return box
+}
+
 // boxWorkingCheckout is the box as it really is, where boxRepo is only its refs: a non-bare
 // repository with the branch checked out, and receive.denyCurrentBranch left as `git init` leaves
 // it. That combination is what rejects the realigning push, so it is what the pre-flight has to be
 // tested against.
-func boxWorkingCheckout(t *testing.T, dir, branch string) string {
+func boxWorkingCheckout(t testing.TB, dir, branch string) string {
 	t.Helper()
 	box := filepath.Join(t.TempDir(), "box")
 	mustRun(t, dir, "git", "init", "--quiet", "--initial-branch=unborn", box)
@@ -135,7 +318,7 @@ func boxWorkingCheckout(t *testing.T, dir, branch string) string {
 
 // sshShim is the e2e stand-in for ssh on its own: it drops the host and runs the command here, so
 // the questions signing asks the box are exercised without a second machine.
-func sshShim(t *testing.T) string {
+func sshShim(t testing.TB) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "ssh-shim")
 	if err := os.WriteFile(p, []byte(fakeSSH), 0o755); err != nil {
@@ -365,7 +548,10 @@ func TestSignWillNotOverwriteABoxThatMovedOn(t *testing.T) {
 	box := boxRepo(t, dir, "feature")
 	imported := mustRun(t, dir, "git", "rev-parse", "feature")
 
-	// The agent answers one more thread on the box, after aif imported the branch here.
+	// The window this guards is between the import and the realignment: the agent answers one
+	// more thread there while signing runs. So the run signs with no box, which imports nothing
+	// and leaves the branch at what the box had, and the box is only handed the result
+	// afterwards, by which time it has moved.
 	commit(t, dir, "c.txt", "c\n", "feature: c on the box while signing ran")
 	boxHead := mustRun(t, dir, "git", "rev-parse", "feature")
 	mustRun(t, dir, "git", "push", "--quiet", box, "feature")
@@ -373,11 +559,13 @@ func TestSignWillNotOverwriteABoxThatMovedOn(t *testing.T) {
 
 	var out strings.Builder
 	o := signOpts(&out, "")
-	o.Push, o.Box = true, box
+	o.Push = true
 	res, err := Sign(o)
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out.String())
 	}
+	o.Box = box
+	res.BoxAligned = alignBox(gitCmd{out: &out}, o, "feature", imported, res.Head)
 
 	if got := mustRun(t, dir, "git", "--git-dir", box, "rev-parse", "feature"); got != boxHead {
 		t.Errorf("box moved from %s to %s, losing the commit only it had", short(boxHead), short(got))
@@ -446,6 +634,7 @@ func TestSignRefusesAPreSigningLineage(t *testing.T) {
 	mustRun(t, dir, "git", "reset", "--hard", "--quiet", backup)
 	commit(t, dir, "d.txt", "d\n", "feature: d, on the stale lineage")
 	stale := mustRun(t, dir, "git", "rev-parse", "feature")
+	mustRun(t, dir, "git", "push", "--force", "--quiet", box, "feature")
 
 	out.Reset()
 	_, err := Sign(o)
@@ -453,7 +642,8 @@ func TestSignRefusesAPreSigningLineage(t *testing.T) {
 		t.Fatalf("signed a pre-signing lineage\n%s", out.String())
 	}
 	// The recovery has to be runnable as printed: the rebase is a Mac-side one onto the pushed
-	// branch, and it is followed by the push that tells the box, without which aif undoes it.
+	// branch, and it is followed by the push that tells the box, without which the next import
+	// undoes it.
 	for _, want := range []string{
 		"unsigned copies", "origin/feature", "feature: a",
 		"git rebase --onto origin/feature ",
@@ -761,7 +951,7 @@ func TestCommitOnBranch(t *testing.T) {
 		{"no such commit here", "0000000", "origin/feature", commitUnknown, "0000000"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, state := commitOnBranch(g, tc.hash, tc.ref)
+			got, state := commitOnBranch(g, tc.hash, newBranchIndex(g, tc.ref))
 			if state != tc.want {
 				t.Errorf("state = %d, want %d", state, tc.want)
 			}
@@ -772,7 +962,7 @@ func TestCommitOnBranch(t *testing.T) {
 	}
 }
 
-// A signature says the signer vouches for the commit. `aif` imports whatever the box's branch
+// A signature says the signer vouches for the commit. The import takes whatever the box's branch
 // holds, so a merge of another branch, a cherry-pick or an agent with a different git config
 // puts someone else's commits in front of this Mac's key. --yes must not wave that through: it
 // answers a question about known work, it does not widen what the key attests to.
@@ -860,7 +1050,7 @@ func TestCommitOnBranchRefusesToGuessBetweenTwoMatches(t *testing.T) {
 	mustRun(t, dir, "git", "update-ref", "refs/heads/feature", d2)
 	mustRun(t, dir, "git", "push", "--quiet", "origin", "feature")
 
-	got, state := commitOnBranch(g, recorded, "origin/feature")
+	got, state := commitOnBranch(g, recorded, newBranchIndex(g, "origin/feature"))
 	if state != commitAmbiguous {
 		t.Fatalf("state = %d, want commitAmbiguous (%d); got hash %q", state, commitAmbiguous, got)
 	}
@@ -909,28 +1099,25 @@ func TestSignRefusals(t *testing.T) {
 		}
 	})
 
-	t.Run("missing aif", func(t *testing.T) {
-		signRepo(t)
-		t.Setenv("SAND_AIF", filepath.Join(t.TempDir(), "not-installed"))
+	// No host configured is a machine that has never run `sand config init`, which is the state
+	// alignBox already tolerates. There is nothing to import and the branch in front of the run
+	// is the only copy of it, so it signs that and says which one it signed.
+	t.Run("no box configured signs what is here", func(t *testing.T) {
+		dir, _ := signRepo(t)
+		before := mustRun(t, dir, "git", "rev-parse", "feature")
 		var out strings.Builder
-		_, err := Sign(signOpts(&out, ""))
-		if err == nil || !strings.Contains(err.Error(), "not on PATH") {
-			t.Fatalf("err = %v, want a stop on the missing import tool", err)
+		res, err := Sign(signOpts(&out, ""))
+		if err != nil {
+			t.Fatalf("%v\n%s", err, out.String())
 		}
-		// Their own binary, so ours is not the answer.
-		if strings.Contains(err.Error(), "./misc/aif") {
-			t.Errorf("told them to install aif over their SAND_AIF: %v", err)
+		if res.Rewritten != 3 {
+			t.Errorf("signed %d commit(s), want 3\n%s", res.Rewritten, out.String())
 		}
-	})
-
-	// The stop for the real aif has to say where aif comes from: it ships in the corp repo,
-	// not here, so it is the one requirement a first run cannot satisfy from the error alone.
-	t.Run("missing aif says where to get it", func(t *testing.T) {
-		if hint := aifHint("aif"); !strings.Contains(hint, "install ./misc/aif") {
-			t.Errorf("hint for the real aif was %q", hint)
+		if !strings.Contains(out.String(), "nothing to import") {
+			t.Errorf("did not say it imported nothing:\n%s", out.String())
 		}
-		if hint := aifHint("/opt/mine/aif-fork"); hint != "" {
-			t.Errorf("hint for an overridden aif was %q", hint)
+		if after := mustRun(t, dir, "git", "rev-parse", "feature"); after == before {
+			t.Error("nothing was rewritten")
 		}
 	})
 

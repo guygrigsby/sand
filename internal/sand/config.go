@@ -146,7 +146,7 @@ func Resolve(hostFlag, remoteDirFlag string) (Config, error) {
 // new field needs nothing here but its own line.
 var configDoc = map[string]string{
 	"host": "ssh alias or user@host for the sandbox; ~/.ssh/config resolves key, user, port.\n" +
-		"# Required, and asked for by `sand config init`: there is no sensible default.",
+		"# Required, and asked for by `sand init`: there is no sensible default.",
 	"remote_dir": "base dir on the sandbox. Per-PR files land in\n" +
 		"# <remote_dir>/<owner>/<repo>/pr-<number>/.",
 	// The harness names come off the harnesses table rather than being retyped, so adding
@@ -156,8 +156,10 @@ var configDoc = map[string]string{
 		"# `pull --no-agent` starts nothing; `pull --agent '<cmd>'` runs something else once.",
 	"model": "model to run it with, in that harness's own spelling. Empty means the\n" +
 		"# harness's default.",
+	// No "unset means $USER" here: writeConfig names every default under its key, and this one
+	// resolves to a name, so saying both put "Unset means $USER. Unset means guy." in the file.
 	"branch_prefix": "what `sand new` puts before <issue>-<title>, and what `sand up` reads\n" +
-		"# the issue number back out of. Unset means $USER.",
+		"# the issue number back out of.",
 }
 
 // configField is one settable key: its name in the file and the field behind it.
@@ -260,29 +262,41 @@ func InitConfig(host string, in io.Reader, out io.Writer) (string, error) {
 		c.Host = host
 	}
 	if c.Host == "" {
-		c.Host = ask(in, out, "sandbox ssh alias or user@host")
+		var answers *bufio.Reader
+		if in != nil {
+			answers = bufio.NewReader(in)
+		}
+		c.Host = ask(answers, out, "sandbox ssh alias or user@host", "")
 	}
 	return p, writeConfig(c)
 }
 
-// ask reads one line. An empty answer, EOF or no reader at all comes back empty, so an
-// unattended run (a setup script, a test) writes the file without a host rather than
-// blocking on a prompt nobody is there to answer or inventing a value.
+// ask reads one line, showing current as what an empty answer keeps. An empty answer, EOF or
+// no reader at all comes back as current, so an unattended run (a setup script, a test) writes
+// the file it would have written rather than blocking on a prompt nobody is there to answer or
+// inventing a value.
 //
-// One question, so one reader. A second question here shares this reader rather than making
-// its own: a bufio.Reader reads ahead, so the second one eats the first one's answer. See
-// confirm in sign.go, where that silently turned a "yes, push" into a branch left unpushed.
-func ask(in io.Reader, out io.Writer, question string) string {
+// The reader is the caller's, made once per run and shared between questions, because a
+// bufio.Reader per question reads ahead and eats the next one's answer. See confirm in sign.go,
+// where that silently turned a "yes, push" into a branch left unpushed.
+func ask(in *bufio.Reader, out io.Writer, question, current string) string {
 	if in == nil {
-		return ""
+		return current
 	}
-	fmt.Fprintf(out, "%s: ", question)
-	line, err := bufio.NewReader(in).ReadString('\n')
+	if current != "" {
+		fmt.Fprintf(out, "%s [%s]: ", question, current)
+	} else {
+		fmt.Fprintf(out, "%s: ", question)
+	}
+	line, err := in.ReadString('\n')
 	if err != nil && line == "" {
 		fmt.Fprintln(out)
-		return ""
+		return current
 	}
-	return strings.TrimSpace(line)
+	if answer := strings.TrimSpace(line); answer != "" {
+		return answer
+	}
+	return current
 }
 
 // writeConfig renders the whole file: one commented key per Config field, values as they

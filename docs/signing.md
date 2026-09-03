@@ -1,7 +1,7 @@
 # Signing: `sand sign [branch]`
 
-The box has no keys, so commits land unsigned and get signed on the Mac. `sand sign` imports the
-branch with `aif`, then re-creates the commits the branch adds over `<remote>/<base>` that are
+The box has no keys, so commits land unsigned and get signed on the Mac. `sand sign` fetches the
+branch from the box, then re-creates the commits the branch adds over `<remote>/<base>` that are
 not signed already, with `git commit-tree -S` under `git filter-branch`, verifies the result,
 offers to push with `--force-with-lease` and, once that push is on the remote, puts the same
 history on the box. Flags: `--remote` (origin), `--base` (main), `--yes`, `--push`, `--dry-run`,
@@ -21,7 +21,7 @@ history on the box. Flags: `--remote` (origin), `--base` (main), `--yes`, `--pus
   next (see `docs/ring.md`). `alignBox` runs only after the push to GitHub returned, so the box
   is never moved to a history the remote rejected, and it never force pushes on faith:
   `git ls-remote` reads the box's head first, the push leases against exactly that hash, and the
-  box's ref is only overwritten when it is either what `aif` imported (the rewrite is the sole
+  box's ref is only overwritten when it is either what the run imported (the rewrite is the sole
   difference) or an ancestor of the signed head. Anything else means the box committed while
   signing ran, those commits exist nowhere else, and a force push would destroy the work this
   tool exists to carry: it stops, says so, and prints the `git fetch` + `git rebase --onto` that
@@ -68,7 +68,7 @@ history on the box. Flags: `--remote` (origin), `--base` (main), `--yes`, `--pus
   different fix: `git rebase <remote>/<base> <branch>`, which drops what is already upstream by
   patch id, rather than the replay that only moves it.
 - **The recovery runs on the Mac and ends with a push to the box**, in that order, and the
-  order is not a style choice. `aif` resets this checkout to the box's branch at the top of
+  order is not a style choice. The import resets this checkout to the box's branch at the top of
   every run, so a rebase done here and not pushed to the box is undone by the next `sand sign`
   before it looks at anything. The rebase itself can only happen here: `<remote>/<branch>` is a
   ref the box has never seen. So the refusal offers to do it: answer y and the run rebases,
@@ -97,25 +97,77 @@ history on the box. Flags: `--remote` (origin), `--base` (main), `--yes`, `--pus
 - **The recovery branch name gets a `-2`, `-3` suffix if taken.** Two runs in the same second
   are normal in a review loop and the second one must not fail on the first one's name.
 
+- **A branch is read in one process, not one per commit.** `branchCommits` needs each commit's
+  parents, both identities and whether it already carries a signature, and all four are in the
+  raw header, so it asks `git rev-list --reverse --header` once instead of running `git cat-file
+  commit` per commit. That was 64 forks on a 63-commit branch, and a signing run reads the
+  branch twice, before the rewrite and after: 114ms of fork became 3ms. Same story for the
+  duplicate check, where `identitiesOf` batches what was a `git show` per commit (127ms → 13ms),
+  and for `push`, where the branch's identity index is built once per run rather than per reply.
+  The benchmarks are in `bench_test.go`; `go test` does not run them.
 - **filter-branch, not rebase.** It replays the original trees with rewritten parents, so merge
   commits survive and no content conflict is possible. A rebase would flatten or stall.
-- **A branch argument is checked before `aif` sees it.** `aif` takes the branch as its only
-  argument, so a word that is not a branch is a word aif is free to read as one of its own
-  subcommands: `sand sign push`, a slip for `--push`, pushed the Mac's HEAD to the box and only
-  then failed on `git switch push`. The name has to resolve locally, on `<remote>`, or on the
-  box, and an unreachable box does not count as evidence against it.
+- **No branch named means the two machines have to agree which one it is.** The Mac's current
+  branch is a guess at what the round is about, and `--push` acts on the guess without asking: a
+  Mac on one branch and a box on another is how a branch nobody was working on got signed, force
+  pushed and realigned in one command. So a bare `sand sign` reads the box's checked-out branch
+  (`boxCurrentBranch`, `ls-remote --symref HEAD` over the URL the import already uses) and stops
+  when it differs, naming both and the two ways to say which was meant. `--yes` and `--push` do
+  not cover it, for the reason `checkSigningIdentity` is not covered by `--yes` either: those
+  flags answer for work the operator named, and this is the name itself. A stop rather than a
+  prompt, because a prompt is what `--push` was asked to skip, and because `confirm` defaults to
+  no, so an unattended run would answer "do not push" and read as a clean round. `sand up` is
+  unaffected: its branch comes from the PR, so it is always named. A box that cannot say which
+  branch it has out (detached HEAD, a bare stand-in, no answer) is not a disagreement.
+- **The import is a `git fetch` of the box's URL, and used to be `aif`.** `aif` is a corp-repo
+  binary that reaches the box through a git remote named `ai`, so every checkout without one
+  refused to sign, naming a remote nothing in this tool has ever used, and a fresh clone of this
+  repo is exactly such a checkout. Nothing about it was needed: `sand` already addresses the box
+  as a git URL (`<host>:projects/<repo>`, from `thisRepoOnBox`) for the realigning push, and the
+  same URL fetches. `git fetch <box> <branch>` then `git switch -C <branch> FETCH_HEAD`, which is
+  one fewer install on a new Mac, one fewer remote to keep pointed at the box, and one fewer tool
+  that can read a branch name as a subcommand of its own.
+- **`-C`, not a merge or a pull.** The box is the authority on what the branch is. Anything on the
+  Mac's copy that the box does not have is either the rewrite from a round whose realignment never
+  landed, or a branch someone moved by hand, and both belong to `checkPreSigningLineage` to refuse
+  with the recovery spelled out. Merging them quietly is how the two lineages start.
+- **What the import takes off the branch is kept under a name.** `-C` moving the ref backwards is
+  the one thing this command does to history before the operator has been asked anything, so a
+  commit only this checkout had goes to `<branch>-before-import-<timestamp>` (`keepAt`, the same
+  naming as the signing recovery branch) and the run prints the branch and the `git log` that
+  lists it. The reflog would technically hold it, but the reflog is not something to have to think
+  of at the moment you notice a commit missing. Failing to keep it stops the run instead: nothing
+  has moved at that point.
+- **The run says what the import did, in every case:** already at this hash, new to this checkout,
+  so many commits ahead, or moved backwards and here is what was kept. Every hash the rest of the
+  run prints is downstream of that one line.
+- **No box configured imports nothing and says so.** That is a machine that has never run
+  `sand config init`, the state `alignBox` and `onBox` already tolerate, and the branch in front
+  of the run is then the only copy there is. A box that *is* configured and does not answer, or
+  does not have the branch, is a stop: a stale local copy signed as if it were the box's is the
+  two-lineage state, arrived at by a different road.
+- **The two ways the import fails are told apart, because the next move differs.** git answers
+  `exit status 128` to both, so on the way out `importFailed` asks the box one more question
+  (`boxBranchHead`, the one implementation of "what is the box's head for this branch", shared
+  with `onBox` and `alignBox`). A box that does not answer is the tailnet or the alias, and the
+  error says which host it used and the `ssh <host> true` that fails the same way. A box that
+  answers without the branch is the branch, and the error points at `sand status` and
+  `sand new <issue>`. A fetch that fails while the box has the branch is neither, and says so
+  rather than guessing.
+- **A branch argument is checked before the fetch sees it.** `sand sign push`, a slip for
+  `--push`, once reached `aif` as a branch name and it read the word as its own push subcommand,
+  sending the Mac's HEAD to the box before git ever said "invalid reference: push". The check
+  outlived the tool that needed it, because naming the branch and the three places it is not
+  beats a failed fetch of a typo. The name has to resolve locally, on `<remote>`, or on the box,
+  and an unreachable box does not count as evidence against it.
 - **Refusals come before the rewrite:** protected branch (`main`, `master`, `develop`, `trunk`,
-  `release/*`), a rebase/merge/cherry-pick in progress, a dirty tree, a missing `aif`, a missing
-  base ref, no common history. A missing `aif` is a stop, never a fallback to another sync route.
-  It is the only requirement here that ships somewhere else (the corp repo, `./tool/go install
-  ./misc/aif`), so that stop names the install line: a first-time refusal a new person cannot
-  clear by reading it is a refusal that sends them looking for another route, which is the thing
-  this stop exists to prevent. Not when `SAND_AIF` is set, since then the binary is theirs.
+  `release/*`), a rebase/merge/cherry-pick in progress, a dirty tree, a branch the box cannot
+  hand over, a missing base ref, no common history.
 - **Verification comes after it:** every branch-unique commit must carry a `gpgsig` header and the
   commit count must be unchanged, or nothing is pushed. A recovery branch
   (`<branch>-before-signing-<timestamp>`) is made before the rewrite and kept afterwards.
 - **Refuses commits this machine did not make.** A signature says the signer vouches for the
-  commit, and `aif` imports whatever the box's branch holds: a merge of another branch, a
+  commit, and the import takes whatever the box's branch holds: a merge of another branch, a
   cherry-pick, an agent with a different git config all put someone else's commits in front of
   the key. filter-branch keeps their author and committer, so the result would read "written by
   them, vouched for by you". Every commit being rewritten must have `user.email` as both author
@@ -139,6 +191,7 @@ history on the box. Flags: `--remote` (origin), `--base` (main), `--yes`, `--pus
   replacement; the lineage check asks the same question in the other direction, and two copies
   of the key would eventually disagree about which one is right.
 - **`--dry-run` stops before the rewrite**, so no history moves, no recovery branch is made and
-  nothing is pushed, to the remote or to the box. It still runs `aif` and `git fetch`: what would be signed is not knowable
-  without the branch and the base.
-- `SAND_AIF` overrides the `aif` binary, which is how the tests import a branch without it.
+  nothing is pushed, to the remote or to the box. It still imports the branch and fetches the
+  base: what would be signed is not knowable without them. So the import's ref moves and its
+  `-before-import-` branch happen in a dry run too, which is the honest answer either way, since
+  the alternative is a preview of a branch the box does not have.

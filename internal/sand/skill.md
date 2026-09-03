@@ -31,6 +31,11 @@ things follow, and both are on you:
   stops the round with a named file rather than halfway through. Untracked files do not count, so
   a build artifact is not a problem. Nothing else about receiving the push is yours to arrange:
   `receive.denyCurrentBranch` is set from the Mac when it is missing.
+- **Stay on the branch you were given, and say which one it is when you report.** The branch
+  this checkout has out is what a bare `sand sign` on the Mac takes the round to be about, and
+  it refuses to guess when the Mac is on a different one, naming both. Switching away here to
+  look at something else and leaving it switched is what causes that. If you do have to end on
+  another branch, the last thing you say should be which.
 - **Never try to fix a hash mismatch by hand.** No rebase, no amend, no reset onto an older
   commit, and no branch built on what the branch used to be. Copies of commits that are already
   signed and on the remote are the failure this arrow exists to prevent, and the Mac refuses to
