@@ -31,6 +31,8 @@ case "$*" in
     exit "${GH_CHECKS_EXIT:-1}"
     ;;
   *"run view"*)   cat "$GH_RUNLOG" ;;
+  *"auth status"*) exit "${GH_AUTH_EXIT:-0}" ;;
+  *"user/ssh_signing_keys"*) cat "${GH_SIGNING_KEYS:-/dev/null}" ;;
   *"api user"*)   echo guy ;;
   *graphql*)      cat "$GH_FIXTURE" ;;
   *"pr create"*)

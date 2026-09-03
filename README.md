@@ -26,7 +26,7 @@ On the Mac:
 - a commit signing key configured in git, and the same key added to your GitHub account as a
   signing key. GitHub reports commits as unverified without it and `sand up` stops rather than
   post replies quoting them.
-- ssh to the box, by whatever alias you give `sand config init`
+- ssh to the box, by whatever alias you give `sand init`
 
 On the box: a checkout of each repo under `~/projects/<repo>`, and an agent CLI (`claude` or
 `pi`), findable over ssh. No `sand` there and nothing to install: the skill that agent works
@@ -41,14 +41,24 @@ rest. `pull` says which binary it could not find rather than starting nothing qu
 Two commands, on the Mac only:
 
     curl -fsSL https://raw.githubusercontent.com/guygrigsby/sand/main/install.sh | bash
-    sand config init     # asks for the box, writes ~/.config/sand/config.yaml
+    sand init            # asks for the config, then checks everything above
+
+`sand init` is the whole setup. It asks for each config key (Enter keeps what is there, or the
+default), writes `~/.config/sand/config.yaml`, and then answers the Requirements list above
+rather than leaving you to find out one command at a time: whether `gh` is authenticated,
+whether this Mac has a signing key *and* whether GitHub has that same key as a signing key,
+whether the checkout has the remote signing pushes to, whether the box answers ssh and holds a
+readable checkout, and whether it has the harness `pull` would start. It writes two things, the
+config file and the skill on the box. Everything else it names, with the command that fixes it.
+Re-running keeps every answer and re-checks the rest, so it is also the "why is this broken"
+command.
 
 The script picks the binary for the machine it is on, puts it in `~/.local/bin`, and runs it to
 prove the download is not a truncated file. `BIN_DIR` moves where it lands and
 `SAND_VERSION=v0.1.0` pins a release. `sand --version` says which one you have.
 
 Nothing gets installed on the box. The skill its agent reads goes over ssh out of this binary,
-written by `sand new` and both `pull` commands before they hand the box any work.
+written by `sand init`, `sand new` and both `pull` commands before they hand the box any work.
 `sand skill install --remote` does it on demand, for a box being set up or before ssh'ing in to
 work by hand.
 

@@ -36,9 +36,10 @@ the box builds on a lineage that no longer exists. Details and the failure modes
 
 ## Commands
 
-Each Mac-side script for this workflow is a subcommand rather than a shell file: `new`, `status`,
-`comments`, `ci`, `up` (`push` is an alias), `sign`, `shot`, `skill`, `config` (`init`, `get`,
-`set`).
+Each Mac-side script for this workflow is a subcommand rather than a shell file: `init`, `new`,
+`status`, `comments`, `ci`, `up` (`push` is an alias), `sign`, `shot`, `skill`, `config` (`init`,
+`get`, `set`). `sand init` is the whole setup of a Mac and the only command a new one needs;
+`sand config init` is still the file half of it, for scripts.
 
 ## Rules for changing this repo
 

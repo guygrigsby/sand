@@ -296,6 +296,9 @@ func boxRepo(t *testing.T, dir, branch string) string {
 func boxAtURL(t *testing.T, dir, branch string) string {
 	t.Helper()
 	box := boxRepo(t, dir, branch)
+	// The real box has that branch checked out, and its HEAD is what says which round is
+	// under way, so the stand-in claims it too.
+	mustRun(t, dir, "git", "--git-dir", box, "symbolic-ref", "HEAD", "refs/heads/"+branch)
 	mustRun(t, dir, "git", "config", "url."+box+".insteadOf", "box:projects/"+filepath.Base(dir))
 	return box
 }

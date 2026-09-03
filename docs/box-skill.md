@@ -9,9 +9,10 @@ it describes.
 ## How it gets to the box
 
 Over ssh, out of the Mac's binary. The box runs no `sand`, so `sand new`, `sand comments pull`
-and `sand ci pull` each install the skill there before they hand the box any work, and `sand
-skill install --remote` does the same on demand, for a box being set up or before ssh'ing in to
-work by hand. The Mac pipes the embedded text into a script that makes three decisions there:
+and `sand ci pull` each install the skill there before they hand the box any work, `sand init`
+does it while setting the machine up (and reports it, since a box with no harness is a gap it
+names), and `sand skill install --remote` does the same on demand, before ssh'ing in to work by
+hand. The Mac pipes the embedded text into a script that makes three decisions there:
 write the canonical file, link a harness that is present, refuse to overwrite anything that is
 not our own symlink. `InstallSkillRemote` and `remoteSkillScript` in `skill.go`, generated from
 the same `harnesses` table as everything else, so the two ends cannot come to know different
