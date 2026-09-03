@@ -31,6 +31,28 @@ a signing key here and the same key on the account, this checkout's `origin`, ss
 box checkout `git` can read (`boxCurrentBranch`, the same call signing uses), and the harness
 `pull` would start being present there.
 
+- **The signing check is two halves for ssh and three for gpg, because that is what GitHub
+  looks at.** Signed-but-unverified is the state `up` stops on at step 3, with the replies
+  unposted, and it is easy to reach because only the local half is visible locally: `git log
+  --show-signature` is happy, the keyring is happy, and GitHub is not. For an ssh key the
+  account either has those bytes as a *signing* key or it does not (`user/ssh_signing_keys`,
+  matched on the base64 field, since the comment differs per machine). For gpg there is a third
+  half: GitHub only calls the commit verified when the committer's address is one it has
+  verified **on that key**, so a key that is on the account with the wrong address on it
+  verifies nothing, and neither machine says so. The check names what the key does list.
+- **The gpg match is by suffix, in both directions.** A gpg key is not one key and not one name
+  for itself: the signature may come from a subkey, `user.signingkey` may hold a short id, a
+  long id, a fingerprint or a `!`-pinned subkey, and GitHub's `key_id` is documented only as
+  "a string" (it returns the 16-hex long id today). So both sides are collected as sets of
+  names — `parseGPGColons` takes the long ids and fingerprints of the primary and every subkey
+  out of `gpg --with-colons` — and `sameGPGKey` accepts a suffix either way, refusing anything
+  under eight characters as a coincidence rather than a name. Expiry and revocation are read
+  off GitHub's answer too, and an unparseable timestamp is not expired: a wrong "expired" sends
+  someone to fix a key that works.
+- **An empty `user.signingkey` is a gap for ssh and normal for gpg.** ssh signing has no keyring
+  to search, so git refuses outright; gpg signs with the secret key matching `user.email`, which
+  is how the common setup is configured. Keying the check on `user.signingkey` alone reported a
+  working gpg Mac as having no signing key.
 - **It writes two things: this Mac's config file, and the skill on the box.** Everything else it
   reports. A setup command that installs a signing key, logs a `gh` in or clones a repo on
   another machine is a setup command doing things nobody asked for, in places nobody asked

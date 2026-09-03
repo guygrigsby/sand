@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // InitOpts is one `sand init` run. In and Out carry the questions, so a test can answer them
@@ -153,28 +154,40 @@ func checkGitHub(g *gaps) {
 }
 
 // checkSigning is the failure `up` stops on most, and the one that is worst to discover there:
-// signing works locally, GitHub calls every commit unverified, and the run stops with the
-// replies unposted. Both halves are checkable here — a key configured to sign with, and the
-// same key on the account as a signing key — so both are checked.
+// the commits are signed, GitHub calls them unverified anyway, and the run stops at step 3 with
+// the replies unposted. What makes that state so easy to reach is that it is two halves and
+// only the first is visible locally — a key to sign with, and the *same key on the GitHub
+// account* — so this checks both, in both formats git can sign in.
 //
-// Only the ssh case is matched against the account. An openpgp key is reported as configured
-// and left there: matching a subkey fingerprint from here is a different job than this command
-// is doing, and a wrong "not on GitHub" would send someone re-adding a key they already have.
+// git's default format is openpgp, so an unset gpg.format is the gpg case and not a missing
+// answer. Both paths end at the same question asked of GitHub, because GitHub is the authority
+// on what it will call verified; nothing on this Mac can answer it.
 func checkSigning(g *gaps) {
 	c := gitCmd{out: io.Discard}
 	key, _ := c.capture("config", "user.signingkey")
-	if key == "" {
-		g.gap("no git signing key, so nothing this Mac signs will verify on GitHub",
-			"git config --global user.signingkey <path-to-key.pub> (and gpg.format ssh)")
+	email, _ := c.capture("config", "user.email")
+	if email == "" {
+		g.gap("no git user.email, so there is no identity to sign as and `sand sign` refuses",
+			"git config --global user.email <you@example.com>")
 		return
 	}
-	format, _ := c.capture("config", "gpg.format")
-	if format != "ssh" {
-		g.ok("signing with a %s key (%s); its presence on your GitHub account is not checked here",
-			cmp.Or(format, "openpgp"), key)
+	if format, _ := c.capture("config", "gpg.format"); format == "ssh" {
+		checkSSHSigning(g, key)
 		return
 	}
+	checkGPGSigning(g, key, email)
+}
 
+// checkSSHSigning matches the key file's own bytes against the account's signing keys. The
+// base64 middle field is the comparison: the comment differs per machine and the algorithm name
+// is shared by every key of its kind.
+func checkSSHSigning(g *gaps, key string) {
+	if key == "" {
+		g.gap("gpg.format is ssh but no user.signingkey, and ssh signing has no keyring to "+
+			"search: git will refuse to sign at all",
+			"git config --global user.signingkey ~/.ssh/id_ed25519.pub")
+		return
+	}
 	body, err := sshKeyBody(key)
 	if err != nil {
 		g.gap(fmt.Sprintf("user.signingkey is %s and cannot be read: %v", key, err),
@@ -188,12 +201,193 @@ func checkSigning(g *gaps) {
 		return
 	}
 	if !strings.Contains(onAccount, body) {
-		g.gap("the signing key is not on your GitHub account as a signing key, so GitHub will "+
-			"call every commit unverified and `sand up` will stop before posting",
+		g.gap("the signing key is on this Mac but not on your GitHub account as a signing key, "+
+			"so GitHub will call every commit unverified and `sand up` will stop before posting",
 			"gh ssh-key add "+key+" --type signing")
 		return
 	}
-	g.ok("signing key %s is on your GitHub account", key)
+	g.ok("ssh signing key %s is on your GitHub account", key)
+}
+
+// checkGPGSigning is the same two halves for a gpg key, which takes more asking because a gpg
+// key is not one key and not one name for itself. The signature may come from a subkey, and
+// `user.signingkey` may hold a short id, a long id, a fingerprint or a `!`-pinned subkey, while
+// GitHub's `key_id` is documented only as "a string". So both sides are collected as sets of
+// names and matched by suffix, which is the one comparison that is right for every pairing of
+// those lengths.
+//
+// There is a third half here that ssh does not have: GitHub only calls a gpg-signed commit
+// verified when the committer's address is one of the addresses it has verified *on that key*.
+// A key that is on the account with the wrong address on it verifies nothing, and neither the
+// local keyring nor `git log --show-signature` says a word about it.
+func checkGPGSigning(g *gaps, key, email string) {
+	if _, err := exec.LookPath("gpg"); err != nil {
+		g.gap("git is set to sign with gpg (the default) and gpg is not installed",
+			"brew install gnupg, or `git config --global gpg.format ssh` to sign with an ssh key")
+		return
+	}
+
+	// An empty user.signingkey is legal and common for gpg: git signs with the secret key
+	// matching user.email. So the lookup is by whichever of the two there is, and only a
+	// keyring with no answer at all is a gap.
+	want := cmp.Or(key, "<"+email+">")
+	ids, err := gpgSecretKeyIDs(want)
+	if err != nil || len(ids) == 0 {
+		g.gap(fmt.Sprintf("gpg has no secret key for %s, so this Mac cannot sign at all", want),
+			"gpg --list-secret-keys --keyid-format=long, then `git config --global user.signingkey <id>`")
+		return
+	}
+
+	var account []ghGPGKey
+	if err := ghJSON(&account, "api", "user/gpg_keys"); err != nil {
+		g.gap("could not ask GitHub which gpg keys the account has: "+firstLine(err.Error(), 200),
+			"gh api user/gpg_keys")
+		return
+	}
+	match, matched, ok := matchGPGKey(account, ids)
+	if !ok {
+		g.gap(fmt.Sprintf("the gpg key for %s is on this Mac but not on your GitHub account, so "+
+			"GitHub will call every commit unverified and `sand up` will stop before posting", want),
+			fmt.Sprintf("gpg --armor --export %s > key.asc && gh gpg-key add key.asc", cmp.Or(key, email)))
+		return
+	}
+	switch {
+	case match.Revoked:
+		g.gap(fmt.Sprintf("GitHub has gpg key %s but it is revoked there, and a revoked key "+
+			"verifies nothing", matched), "upload the current key: gh gpg-key add key.asc")
+		return
+	case expiredAt(match.ExpiresAt):
+		g.gap(fmt.Sprintf("GitHub has gpg key %s and it expired on %s", matched, *match.ExpiresAt),
+			"extend the key (gpg --quick-set-expire), then re-upload it: gh gpg-key add key.asc")
+		return
+	case !verifiedFor(match, email):
+		g.gap(fmt.Sprintf("GitHub has gpg key %s but does not list %s as a verified address on "+
+			"it, so it will call the commits unverified however well they are signed. It lists: %s",
+			matched, email, cmp.Or(strings.Join(verifiedAddresses(match), ", "), "nothing")),
+			fmt.Sprintf("verify %s on your GitHub account, or set user.email to an address the "+
+				"key carries", email))
+		return
+	}
+	g.ok("gpg key %s is on your GitHub account, with %s verified on it", matched, email)
+}
+
+// ghGPGKey is one entry of `GET /user/gpg_keys`, kept to the fields that decide whether a
+// signature of ours verifies: which key it is, whether GitHub still honours it, and which
+// addresses it will accept on a commit signed by it. `emails` lives on the primary key even
+// when the signing subkey is what matched, which is why the match returns the whole entry.
+type ghGPGKey struct {
+	KeyID     string  `json:"key_id"`
+	Revoked   bool    `json:"revoked"`
+	ExpiresAt *string `json:"expires_at"`
+	Emails    []struct {
+		Email    string `json:"email"`
+		Verified bool   `json:"verified"`
+	} `json:"emails"`
+	Subkeys []struct {
+		KeyID   string `json:"key_id"`
+		Revoked bool   `json:"revoked"`
+	} `json:"subkeys"`
+}
+
+// matchGPGKey finds the account entry naming one of this Mac's key ids, primary or subkey, and
+// returns the entry, the name that matched (for the message: it is the one both machines agree
+// on) and whether there was one.
+func matchGPGKey(account []ghGPGKey, ids []string) (ghGPGKey, string, bool) {
+	for _, k := range account {
+		names := []string{k.KeyID}
+		for _, sub := range k.Subkeys {
+			names = append(names, sub.KeyID)
+		}
+		for _, name := range names {
+			if sameGPGKey(name, ids) {
+				return k, strings.ToUpper(name), true
+			}
+		}
+	}
+	return ghGPGKey{}, "", false
+}
+
+// sameGPGKey compares two names for one key when neither length is guaranteed: a fingerprint is
+// 40 hex, a long id its last 16, a short id its last 8. A suffix in either direction is right
+// for every pairing of those and wrong only for two keys that end the same way, which is the
+// collision gpg itself lives with. Under eight characters is not a name, it is a coincidence
+// waiting to happen, so it never matches.
+func sameGPGKey(name string, ids []string) bool {
+	name = strings.ToUpper(name)
+	if len(name) < 8 {
+		return false
+	}
+	for _, id := range ids {
+		if len(id) < 8 {
+			continue
+		}
+		if strings.HasSuffix(id, name) || strings.HasSuffix(name, id) {
+			return true
+		}
+	}
+	return false
+}
+
+// gpgSecretKeyIDs is every name gpg answers to for one key or one address: the long ids of the
+// primary and each subkey, and their fingerprints. A `!`-pinned subkey is asked about unpinned,
+// since the pin says which key signs and this is asking which keys exist.
+func gpgSecretKeyIDs(want string) ([]string, error) {
+	out, err := exec.Command("gpg", "--batch", "--with-colons", "--list-secret-keys",
+		strings.TrimSuffix(want, "!")).Output()
+	if err != nil {
+		return nil, err
+	}
+	return parseGPGColons(string(out)), nil
+}
+
+// parseGPGColons pulls the ids out of gpg's `--with-colons` listing: field 5 of a `sec` or
+// `ssb` line is that key's long id, and field 10 of the `fpr` line under it is its fingerprint.
+// Separate from the exec so the parse is testable without a keyring, which is the only part of
+// this that can be wrong in a way a machine notices.
+func parseGPGColons(out string) []string {
+	var ids []string
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Split(strings.TrimSpace(line), ":")
+		switch {
+		case (f[0] == "sec" || f[0] == "ssb") && len(f) > 4 && f[4] != "":
+			ids = append(ids, strings.ToUpper(f[4]))
+		case f[0] == "fpr" && len(f) > 9 && f[9] != "":
+			ids = append(ids, strings.ToUpper(f[9]))
+		}
+	}
+	return ids
+}
+
+// verifiedFor is whether GitHub will accept this address on a commit signed by that key.
+func verifiedFor(k ghGPGKey, email string) bool {
+	for _, e := range k.Emails {
+		if e.Verified && strings.EqualFold(e.Email, email) {
+			return true
+		}
+	}
+	return false
+}
+
+// verifiedAddresses is what it does accept, which is the useful half of saying no.
+func verifiedAddresses(k ghGPGKey) []string {
+	var out []string
+	for _, e := range k.Emails {
+		if e.Verified {
+			out = append(out, e.Email)
+		}
+	}
+	return out
+}
+
+// expiredAt reads GitHub's null-or-timestamp. Unparseable is not expired: a format this cannot
+// read is not evidence about a key, and calling a working key expired sends someone to fix
+// something that is not broken.
+func expiredAt(ts *string) bool {
+	if ts == nil || *ts == "" {
+		return false
+	}
+	at, err := time.Parse(time.RFC3339, *ts)
+	return err == nil && at.Before(time.Now())
 }
 
 // checkThisCheckout is the Mac side of one repo: it has to be a checkout with the remote signing

@@ -46,7 +46,9 @@ Two commands, on the Mac only:
 `sand init` is the whole setup. It asks for each config key (Enter keeps what is there, or the
 default), writes `~/.config/sand/config.yaml`, and then answers the Requirements list above
 rather than leaving you to find out one command at a time: whether `gh` is authenticated,
-whether this Mac has a signing key *and* whether GitHub has that same key as a signing key,
+whether this Mac has a signing key *and* whether GitHub has that same key (for a gpg key, also
+whether GitHub has your commit address verified on it, without which it calls the commits
+unverified however well they are signed),
 whether the checkout has the remote signing pushes to, whether the box answers ssh and holds a
 readable checkout, and whether it has the harness `pull` would start. It writes two things, the
 config file and the skill on the box. Everything else it names, with the command that fixes it.
