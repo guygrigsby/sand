@@ -99,6 +99,18 @@ history on the box. Flags: `--remote` (origin), `--base` (main), `--yes`, `--pus
 
 - **filter-branch, not rebase.** It replays the original trees with rewritten parents, so merge
   commits survive and no content conflict is possible. A rebase would flatten or stall.
+- **No branch named means the two machines have to agree which one it is.** The Mac's current
+  branch is a guess at what the round is about, and `--push` acts on the guess without asking: a
+  Mac on one branch and a box on another is how a branch nobody was working on got signed, force
+  pushed and realigned in one command. So a bare `sand sign` reads the box's checked-out branch
+  (`boxCurrentBranch`, `ls-remote --symref HEAD` over the URL the import already uses) and stops
+  when it differs, naming both and the two ways to say which was meant. `--yes` and `--push` do
+  not cover it, for the reason `checkSigningIdentity` is not covered by `--yes` either: those
+  flags answer for work the operator named, and this is the name itself. A stop rather than a
+  prompt, because a prompt is what `--push` was asked to skip, and because `confirm` defaults to
+  no, so an unattended run would answer "do not push" and read as a clean round. `sand up` is
+  unaffected: its branch comes from the PR, so it is always named. A box that cannot say which
+  branch it has out (detached HEAD, a bare stand-in, no answer) is not a disagreement.
 - **The import is a `git fetch` of the box's URL, and used to be `aif`.** `aif` is a corp-repo
   binary that reaches the box through a git remote named `ai`, so every checkout without one
   refused to sign, naming a remote nothing in this tool has ever used, and a fresh clone of this

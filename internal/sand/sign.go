@@ -106,6 +106,31 @@ func Sign(o SignOpts) (SignResult, error) {
 		return res, err
 	}
 
+	// The Mac's current branch is a guess at what to sign, and `--push` acts on the guess
+	// without asking: this checkout on one branch and the box on another is how a branch nobody
+	// was working on got signed, force-pushed and realigned. When no branch was named, the two
+	// machines have to agree about which one it is.
+	//
+	// Neither --yes nor --push covers this, for the same reason checkSigningIdentity is not
+	// covered by --yes: those flags answer for work the operator named, and this is the name
+	// itself. It is a stop rather than a prompt because a prompt is exactly what `--push` was
+	// asked to skip, and because confirm defaults to no, so an unattended run would answer
+	// "don't push" and look like a successful signing round.
+	//
+	// A box that cannot say which branch it is on (a detached HEAD, a bare repo, no answer at
+	// all) is not evidence of disagreement. A box that cannot hand the branch over is
+	// importBranch's stop, with its own message.
+	if o.Branch == "" && o.Box != "" {
+		if boxBranch, err := boxCurrentBranch(g, o.Box); err == nil && boxBranch != "" && boxBranch != branch {
+			return res, fmt.Errorf("refusing to sign %s: no branch was named, this checkout is on %s and the\n"+
+				"box is on %s, so which one this run means is a guess, and signing pushes what it guesses.\n"+
+				"  sand sign %s                  signs the branch the box is on\n"+
+				"  git switch %s && sand sign    follows the box here first\n"+
+				"--yes and --push do not cover this: they answer for a branch you named.",
+				branch, branch, boxBranch, boxBranch, boxBranch)
+		}
+	}
+
 	base := o.Remote + "/" + o.Base
 	res.Branch, res.Base = branch, base
 
@@ -463,6 +488,26 @@ func keepAt(g gitCmd, branch, why, head string) (string, error) {
 		return "", err
 	}
 	return name, nil
+}
+
+// boxCurrentBranch is the branch the box's checkout has out, and empty when it cannot say: a
+// detached HEAD there, or a bare stand-in for it, neither of which is a disagreement with this
+// machine. `ls-remote --symref` answers over the same URL the import uses, so asking costs no
+// second transport and no ssh plumbing of its own.
+func boxCurrentBranch(g gitCmd, box string) (string, error) {
+	out, err := g.capture("ls-remote", "--symref", box, "HEAD")
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(out, "\n") {
+		rest, ok := strings.CutPrefix(strings.TrimSpace(line), "ref: ")
+		if !ok {
+			continue
+		}
+		ref, _, _ := strings.Cut(rest, "\t")
+		return strings.TrimPrefix(strings.TrimSpace(ref), "refs/heads/"), nil
+	}
+	return "", nil
 }
 
 // boxBranchHead is the box's head for one branch: empty when it does not have it, an error when

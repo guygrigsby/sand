@@ -144,6 +144,45 @@ func TestSignImportsTheBoxsBranch(t *testing.T) {
 	}
 }
 
+// `sand sign --push` with this checkout on one branch and the box on another signed, force
+// pushed and realigned a branch nobody was working on, without a question, because the Mac's
+// current branch is only a guess at what the round is about. No branch named means the two have
+// to agree, and the flags that skip questions do not skip this one.
+func TestSignRefusesToGuessBetweenTwoBranches(t *testing.T) {
+	dir, _ := signRepo(t)
+	box := boxRepo(t, dir, "feature")
+	mustRun(t, dir, "git", "push", "--quiet", box, "main")
+	mustRun(t, dir, "git", "--git-dir", box, "symbolic-ref", "HEAD", "refs/heads/main")
+	before := mustRun(t, dir, "git", "rev-parse", "feature")
+
+	var out strings.Builder
+	o := signOpts(&out, "") // Yes and, below, Push: the flags that skip every other question
+	o.Push, o.Box = true, box
+	_, err := Sign(o)
+	if err == nil {
+		t.Fatalf("signed the branch this checkout happened to be on\n%s", out.String())
+	}
+	for _, want := range []string{"this checkout is on feature", "box is on main", "sand sign main"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not mention %q: %v", want, err)
+		}
+	}
+	if after := mustRun(t, dir, "git", "rev-parse", "feature"); after != before {
+		t.Errorf("history moved anyway: %s → %s", short(before), short(after))
+	}
+	if refs := mustRun(t, dir, "git", "for-each-ref", "refs/remotes/origin/feature"); refs != "" {
+		t.Errorf("pushed the guess: %q", refs)
+	}
+
+	// Naming the branch is the way to say which one you meant, so it is not blocked by the
+	// disagreement it resolves.
+	out.Reset()
+	o.Branch = "feature"
+	if _, err := Sign(o); err != nil {
+		t.Fatalf("named branch refused as well: %v\n%s", err, out.String())
+	}
+}
+
 // The import moves this checkout's branch to the box's copy, and when that is backwards, what
 // was here goes somewhere with a name. The reflog is not something to have to think of at the
 // moment you notice a commit missing, so the run leaves a branch and says so.
@@ -219,7 +258,9 @@ func TestSignRefusesWhenTheBoxCannotHandTheBranchOver(t *testing.T) {
 
 		var out strings.Builder
 		o := signOpts(&out, "")
-		o.Box = boxRepo(t, dir, "main")
+		// Named, because a box holding only main is also a box on a different branch than this
+		// checkout, and that stop comes first; naming the branch is what says which was meant.
+		o.Branch, o.Box = "feature", boxRepo(t, dir, "main")
 		_, err := Sign(o)
 		if err == nil {
 			t.Fatalf("signed a branch the box does not have\n%s", out.String())
