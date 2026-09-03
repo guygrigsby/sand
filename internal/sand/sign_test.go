@@ -144,23 +144,95 @@ func TestSignImportsTheBoxsBranch(t *testing.T) {
 	}
 }
 
-// A box that is configured and cannot hand the branch over is a stop. Signing the stale local
-// copy instead is how the Mac ends up pushing a lineage the box has never had, which is the
-// state the whole realignment exists to stay out of.
-func TestSignRefusesWhenTheBoxCannotHandTheBranchOver(t *testing.T) {
+// The import moves this checkout's branch to the box's copy, and when that is backwards, what
+// was here goes somewhere with a name. The reflog is not something to have to think of at the
+// moment you notice a commit missing, so the run leaves a branch and says so.
+func TestSignKeepsWhatTheImportTakesOffTheBranch(t *testing.T) {
 	dir, _ := signRepo(t)
-	before := mustRun(t, dir, "git", "rev-parse", "feature")
+	box := boxRepo(t, dir, "feature")
+
+	// A commit made on the Mac, which is the machine that does not write code: a hand-made
+	// commit, or a signed round whose realignment never reached the box.
+	commit(t, dir, "mac.txt", "mac\n", "feature: e, only on the Mac")
+	macOnly := mustRun(t, dir, "git", "rev-parse", "feature")
 
 	var out strings.Builder
 	o := signOpts(&out, "")
-	o.Box = filepath.Join(t.TempDir(), "no-such-box.git")
-	_, err := Sign(o)
-	if err == nil || !strings.Contains(err.Error(), "importing feature from") {
-		t.Fatalf("err = %v, want a stop naming the failed import\n%s", err, out.String())
+	o.Box = box
+	res, err := Sign(o)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
 	}
-	if after := mustRun(t, dir, "git", "rev-parse", "feature"); after != before {
-		t.Errorf("history moved anyway: %s → %s", short(before), short(after))
+
+	kept := mustRun(t, dir, "git", "branch", "--list", "--format=%(refname:short)", "feature-before-import-*")
+	if kept == "" {
+		t.Fatalf("nothing kept the commit only this checkout had (%s):\n%s", short(macOnly), out.String())
 	}
+	if head := mustRun(t, dir, "git", "rev-parse", kept); head != macOnly {
+		t.Errorf("%s is at %s, want the pre-import %s", kept, short(head), short(macOnly))
+	}
+	if !strings.Contains(out.String(), "kept as "+kept) {
+		t.Errorf("output does not say where the commit went:\n%s", out.String())
+	}
+	if signed := mustRun(t, dir, "git", "log", "--format=%s", "feature", "--not", "origin/main"); strings.Contains(signed, "only on the Mac") {
+		t.Errorf("signed a commit the box does not have:\n%s", signed)
+	}
+	if res.Total != 3 {
+		t.Errorf("signed %d commit(s) unique to the branch, want the box's 3\n%s", res.Total, out.String())
+	}
+}
+
+// A box that is configured and cannot hand the branch over is a stop. Signing the stale local
+// copy instead is how the Mac ends up pushing a lineage the box has never had, which is the
+// state the whole realignment exists to stay out of.
+//
+// The two ways it fails need telling apart, because the next move is a different one and git
+// answers "exit status 128" to both: an unreachable box is the tailnet or the alias, a box
+// without the branch is the branch.
+func TestSignRefusesWhenTheBoxCannotHandTheBranchOver(t *testing.T) {
+	t.Run("the box does not answer", func(t *testing.T) {
+		dir, _ := signRepo(t)
+		before := mustRun(t, dir, "git", "rev-parse", "feature")
+
+		var out strings.Builder
+		o := signOpts(&out, "")
+		o.Box = filepath.Join(t.TempDir(), "no-such-box.git")
+		_, err := Sign(o)
+		if err == nil {
+			t.Fatalf("signed without the box\n%s", out.String())
+		}
+		for _, want := range []string{"did not answer", "nothing was signed", "sand config get host"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error does not mention %q: %v", want, err)
+			}
+		}
+		if after := mustRun(t, dir, "git", "rev-parse", "feature"); after != before {
+			t.Errorf("history moved anyway: %s → %s", short(before), short(after))
+		}
+	})
+
+	// The box answers and has never heard of the branch, which is a name that was never created
+	// there rather than a machine that is down.
+	t.Run("the box has no such branch", func(t *testing.T) {
+		dir, _ := signRepo(t)
+		before := mustRun(t, dir, "git", "rev-parse", "feature")
+
+		var out strings.Builder
+		o := signOpts(&out, "")
+		o.Box = boxRepo(t, dir, "main")
+		_, err := Sign(o)
+		if err == nil {
+			t.Fatalf("signed a branch the box does not have\n%s", out.String())
+		}
+		for _, want := range []string{"no branch feature", "sand new"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error does not mention %q: %v", want, err)
+			}
+		}
+		if after := mustRun(t, dir, "git", "rev-parse", "feature"); after != before {
+			t.Errorf("history moved anyway: %s → %s", short(before), short(after))
+		}
+	})
 }
 
 // boxRepo stands in for the box's checkout, holding the branch at the commit the Mac has just

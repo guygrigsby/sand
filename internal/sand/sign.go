@@ -117,17 +117,16 @@ func Sign(o SignOpts) (SignResult, error) {
 	if o.Branch != "" && !g.refExists("refs/heads/"+branch) && !g.refExists(o.Remote+"/"+branch) && !onBox(g, o, branch) {
 		return res, fmt.Errorf("no branch %s: not here, not on %s, not on the box", branch, o.Remote)
 	}
+	// Leaves HEAD on the branch, which is why nothing below switches to it.
 	if err := importBranch(g, o, branch); err != nil {
 		return res, err
 	}
 	if err := g.run("fetch", o.Remote); err != nil {
-		return res, err
+		return res, fmt.Errorf("fetching %s failed, and what is already signed and pushed there is what "+
+			"decides the rest of this run, so nothing was rewritten: %w", o.Remote, err)
 	}
 	if _, err := g.capture("rev-parse", "--verify", "--quiet", base); err != nil {
-		return res, fmt.Errorf("base ref not found: %s", base)
-	}
-	if err := g.run("switch", branch); err != nil {
-		return res, err
+		return res, fmt.Errorf("base ref not found: %s (`--base <branch>` if this repo's is not %s)", base, o.Base)
 	}
 	if _, err := g.capture("merge-base", base, "HEAD"); err != nil {
 		return res, fmt.Errorf("no common history between %s and %s; refusing to rewrite", branch, base)
@@ -219,15 +218,10 @@ func Sign(o SignOpts) (SignResult, error) {
 		return res, nil
 	}
 
-	// Two runs in the same second are normal in a review loop, and the second one must not
-	// fail on the name the first one took.
-	stem := fmt.Sprintf("%s-before-signing-%s", strings.ReplaceAll(branch, "/", "-"), time.Now().Format("20060102150405"))
-	backup := stem
-	for i := 2; g.refExists("refs/heads/" + backup); i++ {
-		backup = fmt.Sprintf("%s-%d", stem, i)
-	}
-	if err := g.run("branch", backup, head); err != nil {
-		return res, err
+	backup, err := keepAt(g, branch, "before-signing", head)
+	if err != nil {
+		return res, fmt.Errorf("could not keep %s at %s before rewriting it, so nothing was rewritten: %w",
+			branch, short(head), err)
 	}
 	restore := fmt.Sprintf("restore with: git switch %s && git reset --hard %s", branch, backup)
 	fmt.Fprintf(o.Out, "\nRecovery branch: %s\n", backup)
@@ -376,16 +370,111 @@ func publish(g gitCmd, o SignOpts, answers *bufio.Reader, res *SignResult, branc
 // No box configured is not a failure. It is a machine that has not run `sand config init`, the
 // state alignBox and onBox already tolerate, and the branch in front of us is then the only
 // answer available. Signing it is more use than a stop, as long as the run says so.
+//
+// It says what it did either way. This is the one step that moves a ref before the operator has
+// been asked anything, and it can move it backwards, so "imported <old> → <new>" is the line
+// that makes the rest of the run's hashes make sense.
 func importBranch(g gitCmd, o SignOpts, branch string) error {
 	if o.Box == "" {
-		fmt.Fprintf(o.Out, "No box configured, so there is nothing to import: signing %s as this checkout has it.\n", branch)
+		fmt.Fprintf(o.Out, "No box configured, so there is nothing to import: signing %s as this checkout\n"+
+			"has it. `sand config set host <alias>` is what makes a run read the box instead.\n", branch)
+		if err := g.run("switch", branch); err != nil {
+			return fmt.Errorf("could not check out %s, so nothing was rewritten: %w", branch, err)
+		}
 		return nil
 	}
+
+	// Empty when the Mac does not have the branch yet, which is a normal first round.
+	before, _ := g.capture("rev-parse", "--verify", "--quiet", "refs/heads/"+branch)
 	if err := g.run("fetch", o.Box, branch); err != nil {
-		return fmt.Errorf("importing %s from %s failed: %w\nthe box is where the branch is written, "+
-			"so signing needs it to answer and to have a branch by that name", branch, o.Box, err)
+		return importFailed(g, o, branch, err)
 	}
-	return g.run("switch", "--force-create", branch, "FETCH_HEAD")
+	imported, err := g.capture("rev-parse", "FETCH_HEAD")
+	if err != nil {
+		return fmt.Errorf("fetched %s from %s but cannot read FETCH_HEAD: %w", branch, o.Box, err)
+	}
+
+	switch {
+	case before == imported:
+		fmt.Fprintf(o.Out, "Imported %s from %s: already at %s.\n", branch, o.Box, short(imported))
+	case before == "":
+		fmt.Fprintf(o.Out, "Imported %s from %s at %s, new to this checkout.\n", branch, o.Box, short(imported))
+	case exec.Command("git", "merge-base", "--is-ancestor", before, imported).Run() == nil:
+		ahead, _ := g.capture("rev-list", "--count", before+".."+imported)
+		fmt.Fprintf(o.Out, "Imported %s from %s: %s → %s, %s commit(s) this checkout did not have.\n",
+			branch, o.Box, short(before), short(imported), ahead)
+	default:
+		// The Mac holds commits the box's branch does not. The box is the authority, so they
+		// come off the branch, but they are not this command's to drop without a way back: the
+		// reflog is not something to have to think of at the moment you notice. Before the ref
+		// moves, and a failure to keep them stops the run rather than losing them.
+		kept, err := keepAt(g, branch, "before-import", before)
+		if err != nil {
+			return fmt.Errorf("%s here holds commit(s) %s does not, and keeping them under a name "+
+				"failed: %w\nnothing has moved; `git log --oneline %s --not %s` is what they are",
+				branch, o.Box, err, branch, imported)
+		}
+		fmt.Fprintf(o.Out, "Imported %s from %s: %s → %s.\n"+
+			"This checkout held commit(s) the box does not, and the box is what gets signed, so they\n"+
+			"are off the branch now and kept as %s:\n  git log --oneline %s --not %s\n",
+			branch, o.Box, short(before), short(imported), kept, kept, branch)
+	}
+
+	if err := g.run("switch", "--force-create", branch, "FETCH_HEAD"); err != nil {
+		return fmt.Errorf("imported %s from %s but could not check it out: %w\n"+
+			"nothing was rewritten and the import is in FETCH_HEAD, so once whatever git named above is\n"+
+			"out of the way (an untracked file it would overwrite, usually):\n"+
+			"  git switch -C %s FETCH_HEAD && sand sign %s", branch, o.Box, err, branch, branch)
+	}
+	return nil
+}
+
+// importFailed says which of the two failures it was, because the next move differs and git's
+// "exit status 128" says neither. One extra question to the box, only on the way out: it either
+// answers and does not have the branch, or it does not answer at all.
+func importFailed(g gitCmd, o SignOpts, branch string, fetchErr error) error {
+	head, err := boxBranchHead(g, o.Box, branch)
+	switch {
+	case err != nil:
+		return fmt.Errorf("%s did not answer, so %s cannot be imported and nothing was signed: %w\n"+
+			"that is the tailnet or the alias rather than the branch. `sand config get host` is what\n"+
+			"this run used; `ssh %s true` is the shortest thing that fails the same way", o.Box, branch, err, o.Box)
+	case head == "":
+		return fmt.Errorf("%s has no branch %s, and the box is where a branch is written, so there is\n"+
+			"nothing to sign. `sand status` lists what it does have; `sand new <issue>` is what creates\n"+
+			"one on both machines", o.Box, branch)
+	default:
+		return fmt.Errorf("importing %s from %s failed, and the box has it at %s, so this is neither the\n"+
+			"box being unreachable nor the branch being missing: %w", branch, o.Box, short(head), fetchErr)
+	}
+}
+
+// keepAt leaves a branch at head, named `<branch>-<why>-<timestamp>`, so history about to be
+// replaced stays reachable by a name somebody can read rather than only in the reflog. Two runs
+// in the same second are normal in a review loop, so a taken name takes a -2, -3 suffix instead
+// of failing the run.
+func keepAt(g gitCmd, branch, why, head string) (string, error) {
+	stem := fmt.Sprintf("%s-%s-%s", strings.ReplaceAll(branch, "/", "-"), why, time.Now().Format("20060102150405"))
+	name := stem
+	for i := 2; g.refExists("refs/heads/" + name); i++ {
+		name = fmt.Sprintf("%s-%d", stem, i)
+	}
+	if err := g.run("branch", name, head); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+// boxBranchHead is the box's head for one branch: empty when it does not have it, an error when
+// it could not be asked. One implementation, because every caller needs those two apart and a
+// bool answer loses the difference.
+func boxBranchHead(g gitCmd, box, branch string) (string, error) {
+	refs, err := g.capture("ls-remote", box, "refs/heads/"+branch)
+	if err != nil {
+		return "", err
+	}
+	head, _, _ := strings.Cut(strings.TrimSpace(refs), "\t")
+	return head, nil
 }
 
 // onBox answers whether the box has this branch, and false when there is no box configured or
@@ -395,8 +484,8 @@ func onBox(g gitCmd, o SignOpts, branch string) bool {
 	if o.Box == "" {
 		return false
 	}
-	refs, err := g.capture("ls-remote", o.Box, "refs/heads/"+branch)
-	return err == nil && strings.TrimSpace(refs) != ""
+	head, err := boxBranchHead(g, o.Box, branch)
+	return err == nil && head != ""
 }
 
 // alignBox puts the box's branch on the history this run just signed.
@@ -423,13 +512,12 @@ func alignBox(g gitCmd, o SignOpts, branch, imported, head string) bool {
 	}
 
 	fmt.Fprintf(o.Out, "\nRealigning the box, which is still on the pre-signing %s:\n", short(imported))
-	refs, err := g.capture("ls-remote", o.Box, "refs/heads/"+branch)
+	boxHead, err := boxBranchHead(g, o.Box, branch)
 	if err != nil {
 		fmt.Fprintf(o.Out, "  could not read %s: %v\n", o.Box, err)
 		fmt.Fprintf(o.Out, "  %s has the signed branch; the box does not. Re-run when it answers.\n", o.Remote)
 		return false
 	}
-	boxHead, _, _ := strings.Cut(strings.TrimSpace(refs), "\t")
 
 	lease := []string{"--force-with-lease=refs/heads/" + branch + ":" + boxHead}
 	switch {

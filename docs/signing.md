@@ -111,11 +111,29 @@ history on the box. Flags: `--remote` (origin), `--base` (main), `--yes`, `--pus
   Mac's copy that the box does not have is either the rewrite from a round whose realignment never
   landed, or a branch someone moved by hand, and both belong to `checkPreSigningLineage` to refuse
   with the recovery spelled out. Merging them quietly is how the two lineages start.
+- **What the import takes off the branch is kept under a name.** `-C` moving the ref backwards is
+  the one thing this command does to history before the operator has been asked anything, so a
+  commit only this checkout had goes to `<branch>-before-import-<timestamp>` (`keepAt`, the same
+  naming as the signing recovery branch) and the run prints the branch and the `git log` that
+  lists it. The reflog would technically hold it, but the reflog is not something to have to think
+  of at the moment you notice a commit missing. Failing to keep it stops the run instead: nothing
+  has moved at that point.
+- **The run says what the import did, in every case:** already at this hash, new to this checkout,
+  so many commits ahead, or moved backwards and here is what was kept. Every hash the rest of the
+  run prints is downstream of that one line.
 - **No box configured imports nothing and says so.** That is a machine that has never run
   `sand config init`, the state `alignBox` and `onBox` already tolerate, and the branch in front
   of the run is then the only copy there is. A box that *is* configured and does not answer, or
   does not have the branch, is a stop: a stale local copy signed as if it were the box's is the
   two-lineage state, arrived at by a different road.
+- **The two ways the import fails are told apart, because the next move differs.** git answers
+  `exit status 128` to both, so on the way out `importFailed` asks the box one more question
+  (`boxBranchHead`, the one implementation of "what is the box's head for this branch", shared
+  with `onBox` and `alignBox`). A box that does not answer is the tailnet or the alias, and the
+  error says which host it used and the `ssh <host> true` that fails the same way. A box that
+  answers without the branch is the branch, and the error points at `sand status` and
+  `sand new <issue>`. A fetch that fails while the box has the branch is neither, and says so
+  rather than guessing.
 - **A branch argument is checked before the fetch sees it.** `sand sign push`, a slip for
   `--push`, once reached `aif` as a branch name and it read the word as its own push subcommand,
   sending the Mac's HEAD to the box before git ever said "invalid reference: push". The check
@@ -154,4 +172,6 @@ history on the box. Flags: `--remote` (origin), `--base` (main), `--yes`, `--pus
   of the key would eventually disagree about which one is right.
 - **`--dry-run` stops before the rewrite**, so no history moves, no recovery branch is made and
   nothing is pushed, to the remote or to the box. It still imports the branch and fetches the
-  base: what would be signed is not knowable without them.
+  base: what would be signed is not knowable without them. So the import's ref moves and its
+  `-before-import-` branch happen in a dry run too, which is the honest answer either way, since
+  the alternative is a preview of a branch the box does not have.
