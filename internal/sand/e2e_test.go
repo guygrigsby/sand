@@ -757,6 +757,7 @@ func TestUpRequiresDescriptionBeforeSigning(t *testing.T) {
 func TestUpCreatesMissingPR(t *testing.T) {
 	dir, _ := signRepo(t)
 	mustRun(t, dir, "git", "switch", "--quiet", "-c", "guy/42-fix-the-thing-safely")
+	boxAtURL(t, dir, "guy/42-fix-the-thing-safely")
 	remoteBase, ghLog := harness(t)
 	prDir := filepath.Join(remoteBase, "o", "r", "issue-42")
 	if err := os.MkdirAll(prDir, 0o755); err != nil {
@@ -792,6 +793,7 @@ func TestUpCreatesMissingPR(t *testing.T) {
 func TestUpSignsPushesAndPosts(t *testing.T) {
 	dir, _ := signRepo(t)
 	mustRun(t, dir, "git", "switch", "--quiet", "-c", "topic")
+	boxAtURL(t, dir, "topic")
 	recorded := mustRun(t, dir, "git", "rev-parse", "--short=7", "HEAD")
 	remoteBase, ghLog := harness(t)
 
@@ -848,6 +850,9 @@ func TestUpPushesABranchThatNeededNoSigning(t *testing.T) {
 	if refs := mustRun(t, dir, "git", "for-each-ref", "refs/remotes/origin/topic"); refs != "" {
 		t.Fatalf("setup pushed after all: %q", refs)
 	}
+	// The box has the signed branch, which is the state this case comes from: the realignment
+	// landed and the push to the remote is the one that did not.
+	boxAtURL(t, dir, "topic")
 	harness(t)
 
 	if err := runPull(nil); err != nil {
@@ -880,6 +885,7 @@ func TestUpPushesABranchThatNeededNoSigning(t *testing.T) {
 func TestUpDryRunChangesNothing(t *testing.T) {
 	dir, _ := signRepo(t)
 	mustRun(t, dir, "git", "switch", "--quiet", "-c", "topic")
+	boxAtURL(t, dir, "topic")
 	before := mustRun(t, dir, "git", "rev-parse", "topic")
 	remoteBase, ghLog := harness(t)
 

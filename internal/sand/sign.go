@@ -21,26 +21,6 @@ import (
 	"time"
 )
 
-// aifBin is the command that imports a branch from the box. SAND_AIF overrides it, which
-// is how the tests put a branch in place without the real tool.
-func aifBin() string {
-	if v := os.Getenv("SAND_AIF"); v != "" {
-		return v
-	}
-	return "aif"
-}
-
-// aifHint is where to get aif, for the one refusal a new person cannot clear by reading it: aif
-// ships in the corp repo rather than this one, and a stop with no way out is what sends somebody
-// looking for another route to move the branch. Empty for an overridden SAND_AIF, since that
-// binary is theirs and ours is not the answer.
-func aifHint(bin string) string {
-	if bin != "aif" {
-		return ""
-	}
-	return ": install it from the corp repo with `./tool/go install ./misc/aif`"
-}
-
 // protectedBranches never get rewritten, whatever the caller says.
 var protectedBranches = map[string]bool{
 	"main": true, "master": true, "develop": true, "trunk": true,
@@ -126,28 +106,19 @@ func Sign(o SignOpts) (SignResult, error) {
 		return res, err
 	}
 
-	// A missing aif is not a reason to reach for some other way of moving the branch: the
-	// wrong branch signed with the right key is worse than a clear stop. It is also the one
-	// requirement a new person cannot satisfy by reading the error, since aif ships in the corp
-	// repo and not here, so the stop carries the install line. Only for the real aif: an
-	// overridden SAND_AIF is somebody's own binary and telling them to install ours is noise.
-	if _, err := exec.LookPath(aifBin()); err != nil {
-		return res, fmt.Errorf("%s is required to import the branch and is not on PATH%s", aifBin(), aifHint(aifBin()))
-	}
-
 	base := o.Remote + "/" + o.Base
 	res.Branch, res.Base = branch, base
 
-	// aif takes the branch as its only argument, so a word that is not a branch is a word aif
-	// is free to read as one of its own subcommands: `sand sign push` pushed this machine's
-	// HEAD to the box and then failed on `git switch push`. The name has to be a branch
-	// something can see before it is handed over. Not the current branch, which exists by
-	// definition, and not a branch that is only on the box when there is no box to ask.
+	// A name nothing can resolve is a typo, and `sand sign push` (a slip for `--push`) is the
+	// one that happened: the word reached the import as a branch name. Answering it here names
+	// the branch and the three places it is not, which is a better error than a failed fetch of
+	// it. Not the current branch, which exists by definition, and not a branch that is only on
+	// the box when there is no box to ask.
 	if o.Branch != "" && !g.refExists("refs/heads/"+branch) && !g.refExists(o.Remote+"/"+branch) && !onBox(g, o, branch) {
 		return res, fmt.Errorf("no branch %s: not here, not on %s, not on the box", branch, o.Remote)
 	}
-	if err := g.stream(exec.Command(aifBin(), branch)); err != nil {
-		return res, fmt.Errorf("%s %s: %w", aifBin(), branch, err)
+	if err := importBranch(g, o, branch); err != nil {
+		return res, err
 	}
 	if err := g.run("fetch", o.Remote); err != nil {
 		return res, err
@@ -388,9 +359,38 @@ func publish(g gitCmd, o SignOpts, answers *bufio.Reader, res *SignResult, branc
 	return nil
 }
 
+// importBranch puts this checkout on the box's copy of the branch, which is the only copy that
+// matters: the box writes the code and the Mac holds whatever the last signing round left here.
+//
+// This was `aif` until it was not. That is a corp-repo binary reaching the box through a git
+// remote named `ai`, so every checkout without one refused to sign, which is every fresh clone
+// of this repo, and the message named a remote nothing in this tool has ever used. None of it
+// was needed: `sand` already addresses the box as a git URL for the realigning push, and the
+// same URL fetches. One fewer install on a new Mac, one fewer thing to keep pointed at the box.
+//
+// -C rather than a merge or a pull: the box is the authority on what the branch is. Anything on
+// this side that the box does not have is either the rewrite from a round whose realignment did
+// not land, or a branch someone moved by hand, and both are checkPreSigningLineage's to refuse
+// with the recovery spelled out. Silently merging them is how two lineages start.
+//
+// No box configured is not a failure. It is a machine that has not run `sand config init`, the
+// state alignBox and onBox already tolerate, and the branch in front of us is then the only
+// answer available. Signing it is more use than a stop, as long as the run says so.
+func importBranch(g gitCmd, o SignOpts, branch string) error {
+	if o.Box == "" {
+		fmt.Fprintf(o.Out, "No box configured, so there is nothing to import: signing %s as this checkout has it.\n", branch)
+		return nil
+	}
+	if err := g.run("fetch", o.Box, branch); err != nil {
+		return fmt.Errorf("importing %s from %s failed: %w\nthe box is where the branch is written, "+
+			"so signing needs it to answer and to have a branch by that name", branch, o.Box, err)
+	}
+	return g.run("switch", "--force-create", branch, "FETCH_HEAD")
+}
+
 // onBox answers whether the box has this branch, and false when there is no box configured or
-// it cannot be reached: the caller is deciding whether to hand a name to aif, and an unreachable
-// box is not evidence that the name is wrong.
+// it cannot be reached: the caller is deciding whether a name is worth importing, and an
+// unreachable box is not evidence that the name is wrong.
 func onBox(g gitCmd, o SignOpts, branch string) bool {
 	if o.Box == "" {
 		return false
@@ -439,7 +439,7 @@ func alignBox(g gitCmd, o SignOpts, branch, imported, head string) bool {
 		fmt.Fprintf(o.Out, "  already at %s\n", short(head))
 		return true
 	case boxHead == imported:
-		// Exactly what aif brought over: the rewrite is the only difference.
+		// Exactly what this run imported: the rewrite is the only difference.
 	default:
 		// Anything else has to be proved harmless before it is overwritten. Behind the signed
 		// history is fine; ahead of it is the box's own work and only the box has it.
@@ -570,10 +570,10 @@ func checkBoxCanReceive(o SignOpts) error {
 // a push the operator declined, a box whose tree was dirty when the realignment came, a branch
 // someone moved by hand.
 //
-// The recovery it prints has to run here and end on the box, in that order, because `aif` resets
-// this checkout to the box's branch at the top of every run: a rebase done here and not pushed
-// to the box is undone by the next `sand sign` before it reads anything. Only the Mac can do the
-// rebase at all, since only the Mac can see <remote>/<branch>.
+// The recovery it prints has to run here and end on the box, in that order, because the import
+// resets this checkout to the box's branch at the top of every run: a rebase done here and not
+// pushed to the box is undone by the next `sand sign` before it reads anything. Only the Mac can
+// do the rebase at all, since only the Mac can see <remote>/<branch>.
 //
 // <remote>/<base> is checked as well as <remote>/<branch>, and it is the worse of the two. A twin
 // on the branch is undone by replacing the branch; a twin on main is merged, permanent, and
@@ -623,8 +623,9 @@ func checkPreSigningLineage(g gitCmd, dirty []string, remote, base, branch, head
 		"This branch was built on a lineage an earlier signing round replaced, so signing it would put a\n"+
 		"second copy of work that is already there on the remote. A twin on a branch goes away when the\n"+
 		"branch is replaced; a twin on the base is merged and permanent. Drop or replay what is duplicated,\n"+
-		"here on the Mac, then give the box the result before signing again: aif resets this checkout to\n"+
-		"the box's branch, so a rebase the box has not been told about is undone by the next run.\n%s",
+		"here on the Mac, then give the box the result before signing again: every run resets this\n"+
+		"checkout to the box's branch, so a rebase the box has not been told about is undone by the next\n"+
+		"one.\n%s",
 		len(dups), where, strings.Join(dups, "\n"), fix)
 	return le
 }
@@ -640,7 +641,7 @@ type lineageError struct {
 func (e *lineageError) Error() string { return e.msg }
 
 // repairLineage does in place what the refusal message spells out: the rebase, then the push
-// that tells the box, because aif resets this checkout to the box's branch and an untold
+// that tells the box, because the import resets this checkout to the box's branch and an untold
 // rebase is undone by the next run. It returns the run state recomputed for the new history.
 // The pre-rebase lineage needs no recovery branch: it is the box's, and the box still has it
 // until the push here replaces it.
@@ -663,7 +664,7 @@ func repairLineage(g gitCmd, o SignOpts, le *lineageError, branch, base, importe
 		// head this run imported, so a box that moved since rejects rather than loses work.
 		lease := "--force-with-lease=refs/heads/" + branch + ":" + imported
 		if err := g.run("push", "--no-verify", lease, o.Box, branch); err != nil {
-			return "", nil, nil, nil, fmt.Errorf("rebased, but the box was not told (%v), and aif "+
+			return "", nil, nil, nil, fmt.Errorf("rebased, but the box was not told (%v), and the next run "+
 				"resets this checkout to the box's branch: push %s to %s or reset --hard %s before re-running",
 				err, branch, o.Box, short(imported))
 		}
@@ -786,7 +787,7 @@ func splitBySigning(commits []branchCommit) (dirty, clean []string) {
 }
 
 // checkSigningIdentity refuses to put this machine's key on a commit somebody else made.
-// `aif` imports whatever the box's branch holds, and a merge of another branch, a cherry-pick
+// The import takes whatever the box's branch holds, and a merge of another branch, a cherry-pick
 // or an agent with a different git config all put commits into the branch-unique set that this
 // operator never wrote. filter-branch keeps their author and committer, so the result reads
 // "written by them, vouched for by you", which is a claim nobody made on purpose.

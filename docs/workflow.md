@@ -48,7 +48,7 @@ checkouts must be clean and the branch must not exist. It writes the issue title
 `<remote_dir>/<owner>/<repo>/issue-<n>/issue.md`; that directory is the durable handoff for
 brainstorming and later holds `pr-description.md`.
 
-The Mac branch exists so `sand up` has an unambiguous current issue before `aif` imports the
+The Mac branch exists so `sand up` has an unambiguous current issue before signing imports the
 box commits. Creating a ref is bookkeeping, not source editing.
 
 - **The prefix is config, and its default is `$USER`.** It was `guy/`, written into both

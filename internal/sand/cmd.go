@@ -287,7 +287,7 @@ func signCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "sign [branch]",
 		Short: "Sign the commits a sandbox branch adds, on the Mac",
-		Long: "Imports the branch with aif, then re-creates every commit unique to it with a\n" +
+		Long: "Fetches the branch from the box, then re-creates every commit unique to it with a\n" +
 			"signature, preserving the commit graph including merges. Verifies that every\n" +
 			"rewritten commit is signed and that none went missing before offering to push.\n" +
 			"Leaves a recovery branch behind either way.\n\n" +

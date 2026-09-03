@@ -23,8 +23,6 @@ quotes a hash has to be posted after the hash it quotes is final and on the remo
 On the Mac:
 
 - `git` and `gh` (authenticated: `gh auth status`)
-- `aif`, which is what imports a box branch into the Mac checkout for `sand sign`. It lives in
-  the corp repo, not this one: `./tool/go install ./misc/aif` from a checkout of it.
 - a commit signing key configured in git, and the same key added to your GitHub account as a
   signing key. GitHub reports commits as unverified without it and `sand up` stops rather than
   post replies quoting them.
@@ -221,7 +219,8 @@ MAC=user@mac`, an rsync with `--delete` into `src/sand`, a build copy rather tha
 
 The box is the canonical source, so never edit the Mac's copy: `sync` refuses to overwrite the
 edit, and nothing downstream of it will accept an uncommitted change anyway. None of this applies
-to using `sand` on any other repo, where `aif` inside `sand sign` does the importing.
+to using `sand` on any other repo, where the fetch inside `sand sign` is what brings the box's
+branch over.
 
 Releases are a signed tag, cut from the Mac:
 
