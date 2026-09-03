@@ -22,7 +22,7 @@ const checksFixture = `[
  {"name":"lint / go 1.26","workflow":"CI","bucket":"fail","state":"FAILURE","event":"pull_request",
   "link":"https://github.com/o/r/actions/runs/7788/job/2","completedAt":"2026-08-31T10:01:00Z",
   "description":""},
- {"name":"buildkite/aperture","workflow":"","bucket":"fail","state":"FAILURE","event":"push",
+ {"name":"buildkite/build","workflow":"","bucket":"fail","state":"FAILURE","event":"push",
   "link":"https://buildkite.com/o/r/builds/12","completedAt":"2026-08-31T10:02:00Z",
   "description":"build #12 failed"},
  {"name":"vet","workflow":"CI","bucket":"pass","state":"SUCCESS","event":"pull_request",
@@ -80,7 +80,7 @@ func TestCIPullWritesTheFailingChecks(t *testing.T) {
 	}
 
 	// Buildkite posts a commit status, and this machine has no client for it: link, no log.
-	bk := read(t, filepath.Join(dir, "ci-buildkite-aperture.md"))
+	bk := read(t, filepath.Join(dir, "ci-buildkite-build.md"))
 	if !strings.Contains(bk, "https://buildkite.com/o/r/builds/12") {
 		t.Errorf("buildkite file lost its link:\n%s", bk)
 	}
@@ -97,7 +97,7 @@ func TestCIPullWritesTheFailingChecks(t *testing.T) {
 	}
 
 	index := read(t, filepath.Join(dir, "index.md"))
-	for _, want := range []string{"o/r#42", "ci-build.md", "buildkite/aperture", "sand up"} {
+	for _, want := range []string{"o/r#42", "ci-build.md", "buildkite/build", "sand up"} {
 		if !strings.Contains(index, want) {
 			t.Errorf("index missing %q:\n%s", want, index)
 		}

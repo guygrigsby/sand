@@ -34,7 +34,7 @@ The fix is that the rewrite goes back where the code is written, in the same com
 it. `sand sign` pushes the signed branch to the box after the push to GitHub succeeds (see
 `alignBox`). The box does not pull it from GitHub, for one reason per repo and both of them
 permanent enough: this repo has no read-only credential on the box at all, and no secret is going
-on that box to give it one; aperture can pull from GitHub, but making the realignment depend on
+on that box to give it one; another repo of mine can pull from GitHub, but making the realignment depend on
 which repo it is means two code paths where one works. So the Mac pushes, always, and every repo
 behaves the same.
 
@@ -47,14 +47,13 @@ working tree too, and it refuses when that tree is dirty, which is the behaviour
 cannot land on top of work the box has not committed.
 
 **`sand sign` sets it, and nobody has to remember it.** It used to be a manual step, and the cost
-of skipping it was invisible for a whole round: aperture's checkout never had it, so every
+of skipping it was invisible for a whole round: another repo's checkout never had it, so every
 realigning push since `alignBox` existed was rejected, said so in one line at the tail of a long
 signing run, and left GitHub holding signed history the box had never seen. Sixteen commits and
 three refused rounds later that is what it cost. See `checkBoxCanReceive`.
 
-The repo is [guygrigsby/sand](https://github.com/guygrigsby/sand), private, default branch
-`main`. The box needs a read-only credential for it to pull, and no more than that: no `gh`, no
-API token, no push. So the box's work still reaches the Mac directly rather than through GitHub:
+The repo is [guygrigsby/sand](https://github.com/guygrigsby/sand), default branch `main`. What
+the box gets is read-only pull access and no more than that: no `gh`, no API token, no push. So the box's work still reaches the Mac directly rather than through GitHub:
 
 - On the Mac, in its copy: `make sync`, which fetches the branch it is on from this box, fast
   forwards to it and installs. No argument needed: `BOX` comes from `sand config get host`, i.e.
@@ -92,7 +91,6 @@ installed `sand` too old to know `config get`, and says to pass `BOX=<alias>`. I
 once, inside the `sync` recipe, so `make build` and `make check` never pay for the compile and
 sync does not pay for it three times.
 
-If the tailnet refuses the Mac's local username (`tailnet policy does not permit you to SSH as
-user "<local-user>"`), the login user belongs in the Mac's `~/.ssh/config`, or in the host itself
-as `sand config set host ubuntu@<box>`. Not in the source: a machine-specific login is not a
+If ssh to the box refuses the Mac's local username, the login user belongs in the Mac's
+`~/.ssh/config`, or in the host itself as `sand config set host ubuntu@<box>`. Not in the source: a machine-specific login is not a
 thing to hardcode for every machine.

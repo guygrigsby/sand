@@ -455,8 +455,8 @@ func checkBox(g *gaps, cfg Config) {
 	// a way it would not be anywhere else, since this command is one somebody is sitting in
 	// front of by definition.
 	if out, err := exec.Command(sshBin(), cfg.Host, "true").CombinedOutput(); err != nil {
-		// The tailnet refusing this Mac's local username is the one that reads as a broken
-		// box rather than as a login, and it is fixed in ssh's config or in the host itself.
+		// A network refusing this Mac's local username is the one that reads as a broken box
+		// rather than as a login, and it is fixed in ssh's config or in the host itself.
 		g.gap(fmt.Sprintf("ssh %s failed: %s", cfg.Host, firstLine(string(out), 200)),
 			fmt.Sprintf("a login name belongs in ~/.ssh/config or in the host: "+
 				"`sand config set host ubuntu@%s`", cfg.Host))

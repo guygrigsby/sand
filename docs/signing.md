@@ -10,7 +10,7 @@ history on the box. Flags: `--remote` (origin), `--base` (main), `--yes`, `--pus
 - **Nothing to sign is not nothing to do.** A branch can arrive here fully signed with the remote
   still behind it: `git rebase` on a Mac with `commit.gpgsign` signs what it replays, so the
   recovery from a duplicated lineage produces signed commits before signing ever sees them.
-  Returning at "nothing to sign" left aperture's branch five commits behind GitHub with `--push`
+  Returning at "nothing to sign" left another repo's branch five commits behind GitHub with `--push`
   on the command line, and it was pushed by hand, which is the one step of the ring that has to
   be a signed push from this machine. Both endings go through `publish`, which pushes when the
   remote is behind, realigns the box either way, and pushes nothing when the remote is already at
@@ -45,11 +45,11 @@ history on the box. Flags: `--remote` (origin), `--base` (main), `--yes`, `--pus
   push, not per remote. That is the right gate for GitHub and wrong for the box twice over: on
   the recovery path the branch handed over is unsigned by construction, that being the point of
   handing it over, and the range the hook measures is the whole history, because there is no
-  remote-tracking ref for the box to bound it against. In aperture it counted 53 commits from
+  remote-tracking ref for the box to bound it against. In another repo it counted 53 commits from
   before that repo signed anything, none of them the branch's, and blocked the push. Nothing
   reaches GitHub unchecked as a result: the box has no credential that can push there, and the
   one push that does go to GitHub keeps the hook. This was the second reason no realigning push
-  had ever landed for aperture, independent of `receive.denyCurrentBranch`, and it also made the
+  had ever landed for that other repo, independent of `receive.denyCurrentBranch`, and it also made the
   printed recovery unrunnable, which is why that line carries the flag too.
 - **A branch built on the replaced lineage is refused, before anything is rewritten.**
   `checkPreSigningLineage` keys every commit about to be signed by tree plus subject and looks
@@ -119,8 +119,8 @@ history on the box. Flags: `--remote` (origin), `--base` (main), `--yes`, `--pus
   no, so an unattended run would answer "do not push" and read as a clean round. `sand up` is
   unaffected: its branch comes from the PR, so it is always named. A box that cannot say which
   branch it has out (detached HEAD, a bare stand-in, no answer) is not a disagreement.
-- **The import is a `git fetch` of the box's URL, and used to be `aif`.** `aif` is a corp-repo
-  binary that reaches the box through a git remote named `ai`, so every checkout without one
+- **The import is a `git fetch` of the box's URL, and used to be a separate binary.** That one
+  reached the box through a git remote named `ai`, so every checkout without such a remote
   refused to sign, naming a remote nothing in this tool has ever used, and a fresh clone of this
   repo is exactly such a checkout. Nothing about it was needed: `sand` already addresses the box
   as a git URL (`<host>:projects/<repo>`, from `thisRepoOnBox`) for the realigning push, and the
@@ -149,13 +149,14 @@ history on the box. Flags: `--remote` (origin), `--base` (main), `--yes`, `--pus
 - **The two ways the import fails are told apart, because the next move differs.** git answers
   `exit status 128` to both, so on the way out `importFailed` asks the box one more question
   (`boxBranchHead`, the one implementation of "what is the box's head for this branch", shared
-  with `onBox` and `alignBox`). A box that does not answer is the tailnet or the alias, and the
+  with `onBox` and `alignBox`). A box that does not answer is the network or the alias, and the
   error says which host it used and the `ssh <host> true` that fails the same way. A box that
   answers without the branch is the branch, and the error points at `sand status` and
   `sand new <issue>`. A fetch that fails while the box has the branch is neither, and says so
   rather than guessing.
 - **A branch argument is checked before the fetch sees it.** `sand sign push`, a slip for
-  `--push`, once reached `aif` as a branch name and it read the word as its own push subcommand,
+  `--push`, once reached that binary as a branch name and it read the word as its own push
+  subcommand,
   sending the Mac's HEAD to the box before git ever said "invalid reference: push". The check
   outlived the tool that needed it, because naming the branch and the three places it is not
   beats a failed fetch of a typo. The name has to resolve locally, on `<remote>`, or on the box,

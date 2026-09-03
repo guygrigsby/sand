@@ -2,7 +2,7 @@
 
 
 `host` is the one setting with no default and the one thing a new Mac has to be told: it names
-one machine on one tailnet, so a compiled-in alias is either someone else's box or a name that
+one specific machine on your own network, so a compiled-in alias is either someone else's box or a name that
 resolves nowhere. `remote_dir` defaults to `~/.sand`, `harness` to `claude`, `branch_prefix` to
 `$USER` and `model` to nothing at all. Set them in `~/.config/sand/config.yaml`, or with `--host` / `--remote-dir`, or
 `SAND_<KEY>` in the environment, in that order of precedence. `harness` is which agent CLI

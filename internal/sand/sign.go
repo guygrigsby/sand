@@ -381,10 +381,10 @@ func publish(g gitCmd, o SignOpts, answers *bufio.Reader, res *SignResult, branc
 // importBranch puts this checkout on the box's copy of the branch, which is the only copy that
 // matters: the box writes the code and the Mac holds whatever the last signing round left here.
 //
-// This was `aif` until it was not. That is a corp-repo binary reaching the box through a git
-// remote named `ai`, so every checkout without one refused to sign, which is every fresh clone
-// of this repo, and the message named a remote nothing in this tool has ever used. None of it
-// was needed: `sand` already addresses the box as a git URL for the realigning push, and the
+// This was a separate binary of ours until it was not. That one reached the box through a git
+// remote named `ai`, so every checkout without such a remote refused to sign, which is every
+// fresh clone of this repo, and the message named a remote nothing in this tool has ever used.
+// None of it was needed: `sand` already addresses the box as a git URL for the realigning push, and the
 // same URL fetches. One fewer install on a new Mac, one fewer thing to keep pointed at the box.
 //
 // -C rather than a merge or a pull: the box is the authority on what the branch is. Anything on
@@ -462,7 +462,7 @@ func importFailed(g gitCmd, o SignOpts, branch string, fetchErr error) error {
 	switch {
 	case err != nil:
 		return fmt.Errorf("%s did not answer, so %s cannot be imported and nothing was signed: %w\n"+
-			"that is the tailnet or the alias rather than the branch. `sand config get host` is what\n"+
+			"that is the network or the alias rather than the branch. `sand config get host` is what\n"+
 			"this run used; `ssh %s true` is the shortest thing that fails the same way", o.Box, branch, err, o.Box)
 	case head == "":
 		return fmt.Errorf("%s has no branch %s, and the box is where a branch is written, so there is\n"+
@@ -592,7 +592,7 @@ func alignBox(g gitCmd, o SignOpts, branch, imported, head string) bool {
 	// cannot verify a signature on, which is exactly right for the push to GitHub and wrong for
 	// this one twice over: the branch reaching the box is unsigned by construction on the recovery
 	// path, and the range the hook measures is the whole history, since there is no
-	// remote-tracking ref for the box to bound it. In aperture that came to 53 commits from
+	// remote-tracking ref for the box to bound it. In another repo that came to 53 commits from
 	// before the repo signed anything, none of them this branch's, and it blocked the push that
 	// keeps the two machines on one lineage. The box cannot push to GitHub, so nothing reaches
 	// GitHub unchecked by skipping it; the push above, which does, keeps the hook.
@@ -627,7 +627,7 @@ echo "deny=$(git config receive.denyCurrentBranch 2>/dev/null || echo unset)"
 //
 // receive.denyCurrentBranch is set rather than reported. git defaults it to "refuse", so a
 // checkout nobody configured rejects every push into the branch it has out, and "warn" or
-// "ignore" take the push while leaving the working tree behind, which is worse. Aperture's
+// "ignore" take the push while leaving the working tree behind, which is worse. Another repo's
 // checkout was never set: every align push since alignBox existed failed with a hint at the tail
 // of a long run, and every following round refused to sign. The setting is there only so this
 // tool's own push can land, it is not source, and that push already rewrites the box's working

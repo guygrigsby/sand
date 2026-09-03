@@ -34,7 +34,7 @@ const (
 // An empty default is a real answer, for two different reasons. No model means the harness
 // picks, which is the only answer that does not go stale every time a model ships. No host
 // means there is nothing sensible to guess: it names one specific machine on one specific
-// tailnet, and a compiled-in alias is either someone else's box or an alias that resolves
+// network, and a compiled-in alias is either someone else's box or an alias that resolves
 // nowhere. `sand config init` asks for it instead, and every command that needs it says so.
 //
 // A function rather than a table because one default is not a constant: the branch prefix is
