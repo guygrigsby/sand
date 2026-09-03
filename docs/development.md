@@ -17,9 +17,11 @@ agent rather than after it.
 `install.sh` is tested too (`internal/sand/install_test.go`), by serving a fake release over
 localhost through `SAND_BASE_URL` and running the real script against it. Everything a coworker
 depends on is after the download: that the platform mapping names an asset, that the file lands
-executable, that a failed download does not overwrite a working binary, and that a machine with a
-harness gets the skill without a second command. The one thing the test cannot say is that the
-GitHub URL resolves, which only a real release proves.
+executable, and that a failed download does not overwrite a working binary. The script also
+installs the skill when it finds a harness on the machine it is running on, which is a
+convenience for a machine that has the binary anyway, not the way the box gets the skill: that
+is ssh, from the Mac, on every pull. The one thing the test cannot say is that the GitHub URL
+resolves, which only a real release proves.
 
 ## Releases
 

@@ -3,8 +3,9 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/guygrigsby/sand/main/install.sh | bash
 #
-# Runs on the Mac and on the box, and it is the same script both times: the only difference is
-# which binary it fetches and whether an agent harness is here to link the skill at.
+# Runs on the machine that drives the box, which is a Mac unless it is not. The box itself needs
+# none of this: it never runs sand, and the skill its agent reads is written over ssh by every
+# `sand new` and every pull.
 #
 # SAND_VERSION=v0.1.0 pins a release, BIN_DIR moves where it lands.
 set -euo pipefail
@@ -65,9 +66,9 @@ version=$("$dest" --version 2>/dev/null) || {
 }
 echo "sand: $dest ($version)"
 
-# The box wants the skill too, and it is idempotent, so there is no reason to make someone run a
-# second command for it. Nothing is installed for a harness that is not here: on the Mac this
-# prints that it skipped and that is the right answer.
+# A harness on this machine gets the skill, since the text is already here and the install is
+# idempotent. That is a convenience for whoever is running an agent locally, not how the box is
+# served; nothing is installed for a harness that is not here.
 if [ -d "$HOME/.claude" ] || [ -d "$HOME/.pi" ]; then
   "$dest" skill install
 fi

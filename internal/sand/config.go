@@ -51,13 +51,13 @@ func configDefaults() map[string]string {
 	}
 }
 
-// ConfigPath is `~/.config/sand/config.yaml` on both machines, `XDG_CONFIG_HOME` first.
+// ConfigPath is `~/.config/sand/config.yaml`, `XDG_CONFIG_HOME` first. The box has none: it
+// never runs this tool.
 //
 // Deliberately not os.UserConfigDir, which answers `~/Library/Application Support` on darwin.
-// This tool has exactly two machines, one Mac and one Linux box, the same person keeps the same
-// file on both, and every mention of it in the docs and in `sand config`'s own output says
-// `~/.config`. A path that is right on one machine and silently different on the other is a
-// config nobody can find.
+// The driving machine is usually a Mac and sometimes a Linux laptop, and every mention of the
+// file in the docs and in `sand config`'s own output says `~/.config`. A path that is right on
+// one of them and silently different on the other is a config nobody can find.
 func ConfigPath() string {
 	dir := os.Getenv("XDG_CONFIG_HOME")
 	if dir == "" {

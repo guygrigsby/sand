@@ -49,11 +49,10 @@ The script picks the binary for the machine it is on, puts it in `~/.local/bin`,
 prove the download is not a truncated file. `BIN_DIR` moves where it lands and
 `SAND_VERSION=v0.1.0` pins a release. `sand --version` says which one you have.
 
-Nothing gets installed on the box. The skill its agent reads is compiled into this binary and
-goes over ssh: `sand new` and both `pull` commands write it there before they hand the box any
-work, so it can never be a different version from the tool that started the run, and it needs
-no release download, no checkout and no `make` over there. `sand skill install --remote` does
-it on demand, for a box being set up or before ssh'ing in to work by hand.
+Nothing gets installed on the box. The skill its agent reads goes over ssh out of this binary,
+written by `sand new` and both `pull` commands before they hand the box any work.
+`sand skill install --remote` does it on demand, for a box being set up or before ssh'ing in to
+work by hand.
 
 Developing `sand` itself is a different thing and lives under [Development](#development): the
 clone, `make sync` and the ring only matter if you are changing the tool. Using it on your own
@@ -197,7 +196,7 @@ carries a signature. So `sand` fails closed wherever it cannot keep that true.
   branch whose commits are unsigned copies of commits already on the remote.
 - One agent per checkout on the box, under `flock`.
 - Everything that writes anywhere but this Mac takes `--dry-run`: `comments pull`,
-  `comments push`, `ci pull`, `sign`, `up`.
+  `comments push`, `ci pull`, `sign`, `up`, `skill install --remote`.
 - `ci pull` only ever reads from GitHub. Nothing it produces is posted anywhere.
 
 ## Development
