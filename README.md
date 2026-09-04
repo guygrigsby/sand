@@ -86,6 +86,7 @@ shape: `sand config set branch_prefix <yours>` if `$USER` is not what you branch
 Everything else defaults the PR to the one for the current branch. A number or a PR URL overrides.
 
     sand status                   # where the work is, on all three machines, and what to run next
+    sand pr create                # agent drafts in your voice, then sign, push and open the PR
     sand comments pull            # threads to the box, agent starts, output streams back
     sand comments pull --no-agent # just write the files
     sand ci pull                  # the PR's failing checks and their logs, same trip
@@ -131,9 +132,9 @@ another PR of the same repo, or a `ci pull` for the same one, refuses to start a
 the first is working, rather than let two edit one tree. `--no-agent` writes the files and
 leaves it alone.
 
-With no PR for the current `<you>/<issue>-...` branch, `up` reads the box-authored
-`issue-<n>/pr-description.md` after signing and pushing, opens the PR, then verifies it. Missing
-or empty prose is a stop rather than a generated body.
+`sand pr create` starts the configured agent in the box checkout and has it inspect the issue, branch diff and commit history. The agent loads the voice skill's `pr-description` register, including `~/.claude/voice/rules.md`, `~/.claude/voice/voice.md` and matching corpus samples, then writes `pr-title.txt` and `pr-description.md` beside `issue.md`. Sand reads those files back byte for byte, signs and pushes the branch, opens the PR with `gh` on the Mac and verifies the commits. Markdown stays Markdown, including code fences. Missing or invalid draft files stop before the PR opens.
+
+With no PR for the current `<you>/<issue>-...` branch, `up` still reads the box-authored `issue-<n>/pr-description.md` after signing and pushing, opens the PR, then verifies it. A `pr-title.txt` beside it overrides the issue title. Missing or empty prose is a stop.
 
 `sand status` is the one to run when you do not know which of those you want. It reads this Mac,
 the box and GitHub at once and prints one `next:` line: the branch and unsigned count here, the

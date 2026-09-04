@@ -757,6 +757,112 @@ func TestUpRequiresDescriptionBeforeSigning(t *testing.T) {
 	}
 }
 
+func TestPRCreateHasTheAgentDraftThenSignsPushesAndOpens(t *testing.T) {
+	dir, _ := signRepo(t)
+	branch := "guy/42-fix-the-thing-safely"
+	mustRun(t, dir, "git", "switch", "--quiet", "-c", branch)
+	boxAtURL(t, dir, branch)
+	remoteBase, ghLog := harness(t)
+	issueDir := filepath.Join(remoteBase, "o", "r", "issue-42")
+	if err := os.MkdirAll(filepath.Join(os.Getenv("HOME"), "projects", "r"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(issueDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(issueDir, "issue.md"), []byte("# Fix the thing\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	agent := filepath.Join(t.TempDir(), "draft-pr")
+	agentPrompt := filepath.Join(t.TempDir(), "agent-prompt")
+	if err := os.WriteFile(agent, []byte(`#!/bin/sh
+printf '%s\n' "$@" > "$PR_PROMPT"
+printf '%s\n' 'Close leaked descriptors' > "$PR_DRAFT_DIR/pr-title.txt"
+cat > "$PR_DRAFT_DIR/pr-description.md" <<'EOF'
+Close descriptors on every return path.
+
+`+"```go"+`
+defer f.Close()
+`+"```"+`
+
+Fixes: #42
+EOF
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PR_DRAFT_DIR", issueDir)
+	t.Setenv("PR_PROMPT", agentPrompt)
+	t.Setenv("GH_PR_MISSING", "1")
+	cmd := prCreateCmd()
+	flagPR, flagAgent, flagYes = "", agent, true
+	t.Cleanup(func() { flagAgent, flagYes = "", false })
+	out := captureStdout(t)
+
+	if err := runPRCreate(cmd); err != nil {
+		t.Fatalf("pr create: %v\n%s\ngh:\n%s", err, out(), read(t, ghLog))
+	}
+
+	log := read(t, ghLog)
+	for _, want := range []string{"pr", "create", "--head", branch, "--title", "Close leaked descriptors"} {
+		if !strings.Contains(log, want) {
+			t.Errorf("gh log missing %q:\n%s", want, log)
+		}
+	}
+	prompt := read(t, agentPrompt)
+	for _, want := range []string{"voice skills", "pr-description register", "~/.claude/voice/rules.md", "~/.claude/voice/voice.md", "sample-source report", branch, "origin/main"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("agent prompt missing %q:\n%s", want, prompt)
+		}
+	}
+	body := read(t, os.Getenv("GH_PR_BODY"))
+	wantBody := "Close descriptors on every return path.\n\n```go\ndefer f.Close()\n```\n\nFixes: #42\n"
+	if body != wantBody {
+		t.Errorf("PR body changed\nwant:\n%s\ngot:\n%s", wantBody, body)
+	}
+	if !strings.Contains(out(), "opened https://github.com/o/r/pull/42") {
+		t.Errorf("output did not report the PR:\n%s", out())
+	}
+}
+
+func TestPRCreateRejectsAStaleDraftTheAgentDidNotWrite(t *testing.T) {
+	dir, _ := signRepo(t)
+	branch := "guy/42-fix-the-thing-safely"
+	mustRun(t, dir, "git", "switch", "--quiet", "-c", branch)
+	boxAtURL(t, dir, branch)
+	remoteBase, ghLog := harness(t)
+	issueDir := filepath.Join(remoteBase, "o", "r", "issue-42")
+	if err := os.MkdirAll(filepath.Join(os.Getenv("HOME"), "projects", "r"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(issueDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"pr-title.txt":      "Old title\n",
+		"pr-description.md": "Old body\n",
+	} {
+		if err := os.WriteFile(filepath.Join(issueDir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	agent := filepath.Join(t.TempDir(), "no-draft")
+	if err := os.WriteFile(agent, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GH_PR_MISSING", "1")
+	cmd := prCreateCmd()
+	flagPR, flagAgent, flagYes = "", agent, true
+	t.Cleanup(func() { flagAgent, flagYes = "", false })
+
+	err := runPRCreate(cmd)
+	if err == nil || !strings.Contains(err.Error(), "pr-description.md") {
+		t.Fatalf("want missing fresh draft error, got %v", err)
+	}
+	if strings.Contains(read(t, ghLog), "pr create") {
+		t.Errorf("opened a PR from the stale draft:\n%s", read(t, ghLog))
+	}
+}
+
 func TestUpCreatesMissingPR(t *testing.T) {
 	dir, _ := signRepo(t)
 	mustRun(t, dir, "git", "switch", "--quiet", "-c", "guy/42-fix-the-thing-safely")

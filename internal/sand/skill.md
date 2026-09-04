@@ -50,6 +50,8 @@ changing code. Before handing work back, write a concise PR body to `pr-descript
 with what changed, include any risk that remains and end with `Fixes: #<n>`. Do not include a
 test plan. `sand up` on the Mac refuses to open the PR without this file.
 
+`sand pr create` on the Mac may start you only to draft that PR. Its prompt names the issue path and output files. Load the voice skill's `pr-description` register, including `~/.claude/voice/rules.md`, `~/.claude/voice/voice.md` and matching corpus samples. Inspect the issue, complete branch diff and commit history. Write one line to `pr-title.txt` and proper GitHub Markdown to `pr-description.md`, preserving useful code fences. Do not edit code or commit during that run.
+
 ## Review files
 
 `~/.sand/<owner>/<repo>/pr-<n>/` (base dir is `~/.sand` unless the Mac's config overrides

@@ -163,17 +163,43 @@ func setupUp(args []string) (Config, Target, bool, error) {
 	return cfg, Target{Owner: issue.Owner, Repo: issue.Repo, Number: number, Title: issue.Title, URL: issue.URL, Branch: branch}, true, nil
 }
 
-func loadPRDescription(cfg Config, target Target) ([]byte, error) {
-	dir, err := fetchDir(cfg.Host, target.issuePath(cfg.RemoteDir))
+type prDraft struct {
+	Title string
+	Body  []byte
+}
+
+func clearPRDraft(cfg Config, target Target) error {
+	dir := target.issuePath(cfg.RemoteDir)
+	remote := fmt.Sprintf("rm -f -- %s %s",
+		remoteQuote(path.Join(dir, "pr-title.txt")),
+		remoteQuote(path.Join(dir, "pr-description.md")))
+	if out, err := exec.Command(sshBin(), cfg.Host, remote).CombinedOutput(); err != nil {
+		return fmt.Errorf("clearing the old PR draft on %s: %w: %s", cfg.Host, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func loadPRDraft(cfg Config, target Target, requireTitle bool) (prDraft, error) {
+	remote := target.issuePath(cfg.RemoteDir)
+	dir, err := fetchDir(cfg.Host, remote)
 	if err != nil {
-		return nil, err
+		return prDraft{}, err
 	}
 	defer os.RemoveAll(dir)
 	body, err := os.ReadFile(filepath.Join(dir, "pr-description.md"))
 	if err != nil || strings.TrimSpace(string(body)) == "" {
-		return nil, fmt.Errorf("%s:%s/pr-description.md is missing or empty; have the sandbox agent write the PR description first", cfg.Host, target.issuePath(cfg.RemoteDir))
+		return prDraft{}, fmt.Errorf("%s:%s/pr-description.md is missing or empty; have the sandbox agent write the PR description first", cfg.Host, remote)
 	}
-	return body, nil
+	title := target.Title
+	if b, titleErr := os.ReadFile(filepath.Join(dir, "pr-title.txt")); titleErr == nil {
+		title = strings.TrimSpace(string(b))
+	} else if requireTitle || !os.IsNotExist(titleErr) {
+		return prDraft{}, fmt.Errorf("reading %s:%s/pr-title.txt: %w", cfg.Host, remote, titleErr)
+	}
+	if title == "" || strings.ContainsAny(title, "\r\n") {
+		return prDraft{}, fmt.Errorf("%s:%s/pr-title.txt must contain one non-empty line", cfg.Host, remote)
+	}
+	return prDraft{Title: title, Body: body}, nil
 }
 
 func createPullRequest(target Target, description []byte) (Target, error) {

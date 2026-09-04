@@ -264,6 +264,21 @@ func agentPrompt(t Target, prDir string, threads int) string {
 		threads, t.Slug(), t.Number, t.Title, prDir)
 }
 
+func prPrompt(t Target, issueDir, remote, base string) string {
+	return fmt.Sprintf(
+		"Use the sand and voice skills. Draft the pull request for issue %s#%d from branch %s in this "+
+			"checkout. Confirm that branch is checked out and stop without writing a draft if it is not. "+
+			"For all writing, use the voice skill's pr-description register: load "+
+			"~/.claude/voice/rules.md and ~/.claude/voice/voice.md, then its matching corpus samples. "+
+			"If the skill or either file is missing, stop without writing a draft. Read the issue at "+
+			"%s/issue.md, inspect the complete branch diff and commit history against %s/%s, then write "+
+			"a one-line title to %s/pr-title.txt and the body as proper GitHub Markdown to "+
+			"%s/pr-description.md. Write only the title and body to those files, without the voice skill's "+
+			"register label or sample-source report. Preserve useful code fences. Explain what changed, "+
+			"include material risks and end with Fixes: #%d. Do not edit code, commit, run sand or gh, or push.",
+		t.Slug(), t.Number, t.Branch, issueDir, remote, base, issueDir, issueDir, t.Number)
+}
+
 // ciPrompt is agentPrompt for failing checks: the same shape, and short for the same reason.
 // It says not to push because that is the one instruction an agent given a red build will
 // otherwise act on, and the box has no key to push with.

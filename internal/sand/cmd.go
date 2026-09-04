@@ -58,7 +58,7 @@ func root() *cobra.Command {
 	}
 	c.PersistentFlags().StringVar(&flagHost, "host", "", "sandbox ssh alias or user@host (overrides config)")
 	c.PersistentFlags().StringVar(&flagRemoteDir, "remote-dir", "", "base dir on the sandbox (overrides config)")
-	c.AddCommand(ciCmd(), commentsCmd(), configCmd(), initCmd(), newCmd(), shotCmd(), signCmd(),
+	c.AddCommand(ciCmd(), commentsCmd(), configCmd(), initCmd(), newCmd(), prCmd(), shotCmd(), signCmd(),
 		skillCmd(), statusCmd(), upCmd())
 	return c
 }
@@ -128,6 +128,63 @@ func newCmd() *cobra.Command {
 	return c
 }
 
+func prCmd() *cobra.Command {
+	c := &cobra.Command{Use: "pr", Short: "Work with pull requests"}
+	c.AddCommand(prCreateCmd())
+	return c
+}
+
+func prCreateCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "create",
+		Short: "Have the sandbox agent draft, then sign, push and open a PR",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runPRCreate(cmd)
+		},
+	}
+	c.Flags().StringVar(&flagRemote, "remote", "origin", "remote to compare against and push to")
+	c.Flags().StringVar(&flagBase, "base", "main", "base branch on that remote")
+	c.Flags().BoolVarP(&flagYes, "yes", "y", false, "skip the confirmation before rewriting history")
+	c.Flags().BoolVar(&flagOtherAuth, "allow-other-authors", false,
+		"sign commits made by someone other than this machine's git identity")
+	c.Flags().BoolVar(&flagDryRun, "dry-run", false, "show what would run, change nothing anywhere")
+	c.Flags().StringVar(&flagAgent, "agent", "", "agent command to run on the sandbox for this draft")
+	c.Flags().StringVar(&flagRepoDir, "repo-dir", "", "repo checkout on the sandbox (default ~/projects/<repo>)")
+	return c
+}
+
+func runPRCreate(cmd *cobra.Command) error {
+	cfg, target, create, err := setupUp(nil)
+	if err != nil {
+		return err
+	}
+	if !create {
+		return fmt.Errorf("%s already has PR #%d", target.Branch, target.Number)
+	}
+	issueDir := target.issuePath(cfg.RemoteDir)
+	run, err := agentRun(cfg, target, prPrompt(target, issueDir, flagRemote, flagBase))
+	if err != nil {
+		return err
+	}
+	if flagDryRun {
+		fmt.Printf("dry run: would run the agent in %s:%s to write pr-title.txt and pr-description.md\n", cfg.Host, run.Dir)
+		fmt.Println("dry run: would then sign, push and open the PR")
+		return nil
+	}
+	if err := ensureRemoteSkill(cfg, os.Stdout); err != nil {
+		return err
+	}
+	if err := clearPRDraft(cfg, target); err != nil {
+		return err
+	}
+	fmt.Printf("starting the agent in %s:%s to draft the PR, Ctrl-C to stop it\n\n", cfg.Host, run.Dir)
+	if err := RunAgent(run); err != nil {
+		return err
+	}
+	return runUp(cmd, nil)
+}
+
 func upCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:     "up [pr-number|pr-url]",
@@ -169,9 +226,11 @@ func runUp(cmd *cobra.Command, args []string) error {
 
 	var description []byte
 	if create {
-		if description, err = loadPRDescription(cfg, target); err != nil {
+		draft, err := loadPRDraft(cfg, target, cmd.Name() == "create")
+		if err != nil {
 			return err
 		}
+		target.Title, description = draft.Title, draft.Body
 		fmt.Printf("Issue:   %s#%d %q\n", target.Slug(), target.Number, target.Title)
 	} else {
 		fmt.Printf("PR:      %s#%d %q\n", target.Slug(), target.Number, target.Title)
