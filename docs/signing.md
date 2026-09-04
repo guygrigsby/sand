@@ -96,6 +96,11 @@ history on the box. Flags: `--remote` (origin), `--base` (main), `--yes`, `--pus
   must still be on the branch, on top of the existing "all signed, count unchanged" checks.
 - **The recovery branch name gets a `-2`, `-3` suffix if taken.** Two runs in the same second
   are normal in a review loop and the second one must not fail on the first one's name.
+- **`sand cleanup` deletes recovery branches in one pass.** It matches only local branches ending
+  in `-before-signing-<timestamp>` or `-before-import-<timestamp>`, including the numeric collision
+  suffix, lists them and asks once. `--yes` makes the same cleanup non-interactive. Recovery
+  branches are deliberately retained until this explicit command: signing cannot know when the
+  operator is done needing the restore point.
 
 - **A branch is read in one process, not one per commit.** `branchCommits` needs each commit's
   parents, both identities and whether it already carries a signature, and all four are in the
