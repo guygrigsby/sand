@@ -264,19 +264,22 @@ func agentPrompt(t Target, prDir string, threads int) string {
 		threads, t.Slug(), t.Number, t.Title, prDir)
 }
 
-func prPrompt(t Target, issueDir, remote, base string) string {
+func prPrompt(t Target, draftDir, remote, base string) string {
+	context := "There is no linked issue; do not add a Fixes line."
+	if t.Number > 0 {
+		context = fmt.Sprintf("Read the linked issue at %s/issue.md and end the body with Fixes: #%d.", draftDir, t.Number)
+	}
 	return fmt.Sprintf(
-		"Use the sand and voice skills. Draft the pull request for issue %s#%d from branch %s in this "+
-			"checkout. Confirm that branch is checked out and stop without writing a draft if it is not. "+
-			"For all writing, use the voice skill's pr-description register: load "+
-			"~/.claude/voice/rules.md and ~/.claude/voice/voice.md, then its matching corpus samples. "+
-			"If the skill or either file is missing, stop without writing a draft. Read the issue at "+
-			"%s/issue.md, inspect the complete branch diff and commit history against %s/%s, then write "+
-			"a one-line title to %s/pr-title.txt and the body as proper GitHub Markdown to "+
-			"%s/pr-description.md. Write only the title and body to those files, without the voice skill's "+
-			"register label or sample-source report. Preserve useful code fences. Explain what changed, "+
-			"include material risks and end with Fixes: #%d. Do not edit code, commit, run sand or gh, or push.",
-		t.Slug(), t.Number, t.Branch, issueDir, remote, base, issueDir, issueDir, t.Number)
+		"Use the sand and voice skills. Draft the pull request for %s from branch %s in this checkout. "+
+			"Confirm that branch is checked out and stop without writing a draft if it is not. For all "+
+			"writing, use the voice skill's pr-description register: load ~/.claude/voice/rules.md and "+
+			"~/.claude/voice/voice.md, then its matching corpus samples. If the skill or either file is "+
+			"missing, stop without writing a draft. %s Inspect the complete branch diff and commit history "+
+			"against %s/%s, then write a one-line title to %s/pr-title.txt and the body as proper GitHub "+
+			"Markdown to %s/pr-description.md. Write only the title and body to those files, without the "+
+			"voice skill's register label or sample-source report. Preserve useful code fences. Explain "+
+			"what changed and include material risks. Do not edit code, commit, run sand or gh, or push.",
+		t.Slug(), t.Branch, context, remote, base, draftDir, draftDir)
 }
 
 // ciPrompt is agentPrompt for failing checks: the same shape, and short for the same reason.

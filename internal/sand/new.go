@@ -17,6 +17,13 @@ func (t Target) issuePath(base string) string {
 	return path.Join(base, segment(t.Owner), segment(t.Repo), fmt.Sprintf("issue-%d", t.Number))
 }
 
+func (t Target) prDraftPath(base string) string {
+	if t.Number > 0 {
+		return t.issuePath(base)
+	}
+	return path.Join(base, segment(t.Owner), segment(t.Repo), "pr-draft")
+}
+
 // issueBranch is the one branch name sand both writes and reads: `new` creates it, and `up`
 // takes the issue number back out of it when there is no PR yet. The prefix is config
 // (branch_prefix, defaulting to $USER) rather than the `guy/` it was compiled with, because a
@@ -122,6 +129,28 @@ func runNew(args []string) error {
 	return nil
 }
 
+func setupPRCreate() (Config, Target, error) {
+	cfg, err := Resolve(flagHost, flagRemoteDir)
+	if err != nil {
+		return cfg, Target{}, err
+	}
+	target, found, err := currentBranchPR()
+	if err != nil {
+		return cfg, Target{}, err
+	}
+	if found {
+		return cfg, Target{}, fmt.Errorf("%s already has PR #%d", target.Branch, target.Number)
+	}
+	if number, ok := issueNumberFromBranch(cfg.BranchPrefix, target.Branch); ok {
+		issue, err := fetchIssue(number)
+		if err != nil {
+			return cfg, Target{}, err
+		}
+		target.Number, target.Title, target.URL = number, issue.Title, issue.URL
+	}
+	return cfg, target, nil
+}
+
 func setupUp(args []string) (Config, Target, bool, error) {
 	cfg, err := Resolve(flagHost, flagRemoteDir)
 	if err != nil {
@@ -169,7 +198,7 @@ type prDraft struct {
 }
 
 func clearPRDraft(cfg Config, target Target) error {
-	dir := target.issuePath(cfg.RemoteDir)
+	dir := target.prDraftPath(cfg.RemoteDir)
 	remote := fmt.Sprintf("rm -f -- %s %s",
 		remoteQuote(path.Join(dir, "pr-title.txt")),
 		remoteQuote(path.Join(dir, "pr-description.md")))
@@ -180,7 +209,7 @@ func clearPRDraft(cfg Config, target Target) error {
 }
 
 func loadPRDraft(cfg Config, target Target, requireTitle bool) (prDraft, error) {
-	remote := target.issuePath(cfg.RemoteDir)
+	remote := target.prDraftPath(cfg.RemoteDir)
 	dir, err := fetchDir(cfg.Host, remote)
 	if err != nil {
 		return prDraft{}, err

@@ -155,14 +155,11 @@ func prCreateCmd() *cobra.Command {
 }
 
 func runPRCreate(cmd *cobra.Command) error {
-	cfg, target, create, err := setupUp(nil)
+	cfg, target, err := setupPRCreate()
 	if err != nil {
 		return err
 	}
-	if !create {
-		return fmt.Errorf("%s already has PR #%d", target.Branch, target.Number)
-	}
-	issueDir := target.issuePath(cfg.RemoteDir)
+	issueDir := target.prDraftPath(cfg.RemoteDir)
 	run, err := agentRun(cfg, target, prPrompt(target, issueDir, flagRemote, flagBase))
 	if err != nil {
 		return err
@@ -182,7 +179,7 @@ func runPRCreate(cmd *cobra.Command) error {
 	if err := RunAgent(run); err != nil {
 		return err
 	}
-	return runUp(cmd, nil)
+	return runUpTarget(cmd, nil, &target)
 }
 
 func upCmd() *cobra.Command {
@@ -215,7 +212,20 @@ func upCmd() *cobra.Command {
 // signing rewrites hashes, the replies quote them, so signing has to be finished and pushed
 // and confirmed by GitHub before a single reply goes out.
 func runUp(cmd *cobra.Command, args []string) error {
-	cfg, target, create, err := setupUp(args)
+	return runUpTarget(cmd, args, nil)
+}
+
+func runUpTarget(cmd *cobra.Command, args []string, preset *Target) error {
+	var cfg Config
+	var target Target
+	var create bool
+	var err error
+	if preset == nil {
+		cfg, target, create, err = setupUp(args)
+	} else {
+		cfg, err = Resolve(flagHost, flagRemoteDir)
+		target, create = *preset, true
+	}
 	if err != nil {
 		return err
 	}
@@ -237,7 +247,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Printf("Branch:  %s → %s/%s\n", branch, flagRemote, flagBase)
 	if create {
-		fmt.Printf("PR body: %s:%s/pr-description.md\n", cfg.Host, target.issuePath(cfg.RemoteDir))
+		fmt.Printf("PR body: %s:%s/pr-description.md\n", cfg.Host, target.prDraftPath(cfg.RemoteDir))
 	} else {
 		fmt.Printf("Replies: %s:%s\n", cfg.Host, target.RemotePath(cfg.RemoteDir))
 	}

@@ -132,7 +132,7 @@ another PR of the same repo, or a `ci pull` for the same one, refuses to start a
 the first is working, rather than let two edit one tree. `--no-agent` writes the files and
 leaves it alone.
 
-`sand pr create` starts the configured agent in the box checkout and has it inspect the issue, branch diff and commit history. The agent loads the voice skill's `pr-description` register, including `~/.claude/voice/rules.md`, `~/.claude/voice/voice.md` and matching corpus samples, then writes `pr-title.txt` and `pr-description.md` beside `issue.md`. Sand reads those files back byte for byte, signs and pushes the branch, opens the PR with `gh` on the Mac and verifies the commits. Markdown stays Markdown, including code fences. Missing or invalid draft files stop before the PR opens.
+`sand pr create` starts the configured agent in the box checkout and has it inspect the branch diff and commit history. If the branch name identifies an issue, the agent reads that context too. The agent loads the voice skill's `pr-description` register, including `~/.claude/voice/rules.md`, `~/.claude/voice/voice.md` and matching corpus samples, then writes `pr-title.txt` and `pr-description.md` under the repo's sand directory. Sand reads those files back byte for byte, signs and pushes the branch, opens the PR with `gh` on the Mac and verifies the commits. Markdown stays Markdown, including code fences. Missing or invalid draft files stop before the PR opens.
 
 With no PR for the current `<you>/<issue>-...` branch, `up` still reads the box-authored `issue-<n>/pr-description.md` after signing and pushing, opens the PR, then verifies it. A `pr-title.txt` beside it overrides the issue title. Missing or empty prose is a stop.
 

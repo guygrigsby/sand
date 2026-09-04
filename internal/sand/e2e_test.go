@@ -759,18 +759,15 @@ func TestUpRequiresDescriptionBeforeSigning(t *testing.T) {
 
 func TestPRCreateHasTheAgentDraftThenSignsPushesAndOpens(t *testing.T) {
 	dir, _ := signRepo(t)
-	branch := "guy/42-fix-the-thing-safely"
+	branch := "guy/pr-create"
 	mustRun(t, dir, "git", "switch", "--quiet", "-c", branch)
 	boxAtURL(t, dir, branch)
 	remoteBase, ghLog := harness(t)
-	issueDir := filepath.Join(remoteBase, "o", "r", "issue-42")
+	issueDir := filepath.Join(remoteBase, "o", "r", "pr-draft")
 	if err := os.MkdirAll(filepath.Join(os.Getenv("HOME"), "projects", "r"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(issueDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(issueDir, "issue.md"), []byte("# Fix the thing\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	agent := filepath.Join(t.TempDir(), "draft-pr")
@@ -784,8 +781,6 @@ Close descriptors on every return path.
 `+"```go"+`
 defer f.Close()
 `+"```"+`
-
-Fixes: #42
 EOF
 `), 0o755); err != nil {
 		t.Fatal(err)
@@ -809,13 +804,13 @@ EOF
 		}
 	}
 	prompt := read(t, agentPrompt)
-	for _, want := range []string{"voice skills", "pr-description register", "~/.claude/voice/rules.md", "~/.claude/voice/voice.md", "sample-source report", branch, "origin/main"} {
+	for _, want := range []string{"voice skills", "pr-description register", "~/.claude/voice/rules.md", "~/.claude/voice/voice.md", "sample-source report", "no linked issue", branch, "origin/main"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("agent prompt missing %q:\n%s", want, prompt)
 		}
 	}
 	body := read(t, os.Getenv("GH_PR_BODY"))
-	wantBody := "Close descriptors on every return path.\n\n```go\ndefer f.Close()\n```\n\nFixes: #42\n"
+	wantBody := "Close descriptors on every return path.\n\n```go\ndefer f.Close()\n```\n"
 	if body != wantBody {
 		t.Errorf("PR body changed\nwant:\n%s\ngot:\n%s", wantBody, body)
 	}
@@ -826,11 +821,11 @@ EOF
 
 func TestPRCreateRejectsAStaleDraftTheAgentDidNotWrite(t *testing.T) {
 	dir, _ := signRepo(t)
-	branch := "guy/42-fix-the-thing-safely"
+	branch := "guy/pr-create"
 	mustRun(t, dir, "git", "switch", "--quiet", "-c", branch)
 	boxAtURL(t, dir, branch)
 	remoteBase, ghLog := harness(t)
-	issueDir := filepath.Join(remoteBase, "o", "r", "issue-42")
+	issueDir := filepath.Join(remoteBase, "o", "r", "pr-draft")
 	if err := os.MkdirAll(filepath.Join(os.Getenv("HOME"), "projects", "r"), 0o755); err != nil {
 		t.Fatal(err)
 	}
