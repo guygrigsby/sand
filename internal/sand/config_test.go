@@ -151,14 +151,14 @@ func TestSetRejectsUnknownKey(t *testing.T) {
 func TestInitIsIdempotent(t *testing.T) {
 	configHome(t)
 
-	if _, err := InitConfig("", strings.NewReader("first-box\n"), io.Discard); err != nil {
+	if _, err := InitConfig("", strings.NewReader("first-box\nkim\n"), io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	first := read(t, ConfigPath())
 
-	// Second run: a different answer waiting on stdin, which must never be read, because
-	// the file already names a host.
-	if _, err := InitConfig("", strings.NewReader("second-box\n"), io.Discard); err != nil {
+	// Second run: different answers waiting on stdin, which must never be read, because
+	// the file already names both required keys.
+	if _, err := InitConfig("", strings.NewReader("second-box\nlee\n"), io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	if second := read(t, ConfigPath()); second != first {
@@ -173,13 +173,13 @@ func TestInitIsIdempotent(t *testing.T) {
 	}
 }
 
-// The prompt is the only way in for the one key with no default, so it has to reach the
-// file; and --host has to win over asking at all.
+// The prompt is the only way in for the keys with no default, so they have to reach the
+// file; and --host has to win over asking for the host at all.
 func TestInitAsksForTheHost(t *testing.T) {
 	configHome(t)
 
 	var prompt strings.Builder
-	if _, err := InitConfig("", strings.NewReader("  ubuntu@box  \n"), &prompt); err != nil {
+	if _, err := InitConfig("", strings.NewReader("  ubuntu@box  \nkim\n"), &prompt); err != nil {
 		t.Fatal(err)
 	}
 	if c, _ := Load(); c.Host != "ubuntu@box" {
@@ -190,20 +190,39 @@ func TestInitAsksForTheHost(t *testing.T) {
 	}
 
 	configHome(t)
-	var quiet strings.Builder
-	if _, err := InitConfig("flag-box", strings.NewReader("typed-box\n"), &quiet); err != nil {
+	var promptAgain strings.Builder
+	if _, err := InitConfig("flag-box", strings.NewReader("kim\n"), &promptAgain); err != nil {
 		t.Fatal(err)
 	}
 	if c, _ := Load(); c.Host != "flag-box" {
 		t.Errorf("host = %q, want --host to win", c.Host)
 	}
-	if quiet.String() != "" {
-		t.Errorf("asked anyway: %q", quiet.String())
+	if strings.Contains(promptAgain.String(), "sandbox ssh alias") {
+		t.Errorf("asked for the host anyway: %q", promptAgain.String())
 	}
 }
 
-// Unattended: no answer available. Write the file, leave the host unset, do not block and
-// do not invent a hostname.
+func TestInitAsksForTheBranchPrefix(t *testing.T) {
+	configHome(t)
+
+	var prompt strings.Builder
+	if _, err := InitConfig("", strings.NewReader("ubuntu@box\nkim\n"), &prompt); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.BranchPrefix != "kim" {
+		t.Errorf("branch_prefix = %q, want the answer", c.BranchPrefix)
+	}
+	if !strings.Contains(prompt.String(), "branch prefix") {
+		t.Errorf("no branch prefix prompt in %q", prompt.String())
+	}
+}
+
+// Unattended: no answer available. Write the file, leave the required keys unset, do not
+// block and do not invent names.
 func TestInitWithNothingToRead(t *testing.T) {
 	configHome(t)
 	for _, in := range []io.Reader{nil, strings.NewReader("")} {
@@ -211,8 +230,9 @@ func TestInitWithNothingToRead(t *testing.T) {
 		if _, err := InitConfig("", in, io.Discard); err != nil {
 			t.Fatalf("in = %v: %v", in, err)
 		}
-		if c, _ := Load(); c.Host != "" {
-			t.Errorf("in = %v: host = %q, want it left unset", in, c.Host)
+		c, _ := Load()
+		if c.Host != "" || c.BranchPrefix != "" {
+			t.Errorf("in = %v: host = %q, branch_prefix = %q; want both left unset", in, c.Host, c.BranchPrefix)
 		}
 		if _, err := Resolve("", ""); err == nil {
 			t.Error("Resolve accepted an empty host")

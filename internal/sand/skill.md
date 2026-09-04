@@ -45,7 +45,7 @@ things follow, and both are on you:
 
 `sand new <issue-number>` puts the issue at `~/.sand/<owner>/<repo>/issue-<n>/issue.md` and
 checks out `<prefix>/<n>-<title>` in this repo, the prefix being whoever runs sand on the Mac
-(`branch_prefix`, their `$USER` unless they set it). Read `issue.md` before brainstorming or
+(their configured `branch_prefix`; sand requires one). Read `issue.md` before brainstorming or
 changing code. Before handing work back, write a concise PR body to `pr-description.md` beside it. Lead
 with what changed, include any risk that remains and end with `Fixes: #<n>`. Do not include a
 test plan. `sand up` on the Mac refuses to open the PR without this file.

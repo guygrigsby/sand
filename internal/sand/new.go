@@ -43,15 +43,21 @@ func issueNumberFromBranch(prefix, branch string) (int, bool) {
 	return number, err == nil && number > 0
 }
 
-// branchPrefix is the prefix as it appears in a branch name: with its slash, and empty when
-// there is none, which is what an unset config on a machine with no $USER comes to. A branch
-// of plain `<issue>-<title>` is a fine answer there; inventing a name is not.
+// branchPrefix is the prefix as it appears in a branch name: with its slash. Empty is not a
+// branch shape anymore; requireBranchPrefix is where unset config is refused.
 func branchPrefix(prefix string) string {
 	prefix = strings.Trim(prefix, "/")
 	if prefix == "" {
 		return ""
 	}
 	return prefix + "/"
+}
+
+func requireBranchPrefix(cfg Config) error {
+	if branchPrefix(cfg.BranchPrefix) == "" {
+		return fmt.Errorf("no branch_prefix: run `sand config init`, or set it with `sand config set branch_prefix <yours>`")
+	}
+	return nil
 }
 
 func runNew(args []string) error {
@@ -61,6 +67,9 @@ func runNew(args []string) error {
 	}
 	cfg, err := Resolve(flagHost, flagRemoteDir)
 	if err != nil {
+		return err
+	}
+	if err := requireBranchPrefix(cfg); err != nil {
 		return err
 	}
 	issue, err := fetchIssue(number)
@@ -150,6 +159,9 @@ func setupUp(args []string) (Config, Target, bool, error) {
 	}
 
 	branch := target.Branch
+	if err := requireBranchPrefix(cfg); err != nil {
+		return cfg, Target{}, false, err
+	}
 	number, ok := issueNumberFromBranch(cfg.BranchPrefix, branch)
 	if !ok {
 		return cfg, Target{}, false, fmt.Errorf("no open PR for branch %q in %s and its name does not identify an issue "+

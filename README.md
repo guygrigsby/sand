@@ -79,9 +79,7 @@ This writes `issue.md` under `<remote_dir>/<owner>/<repo>/issue-1532/` and creat
 on the box for whichever agent you ask about the issue there. The box agent writes
 `pr-description.md` beside the issue before handoff.
 
-The `<you>` is `branch_prefix`, your `$USER` unless you set it. It is the name `sand up` reads
-the issue number back out of when there is no PR yet, so a branch made by hand wants the same
-shape: `sand config set branch_prefix <yours>` if `$USER` is not what you branch under.
+The `<you>` is `branch_prefix`, which is required and asked for by `sand init` and `sand config init`. It is the name `sand up` reads the issue number back out of when there is no PR yet, so a branch made by hand wants the same shape: `sand config set branch_prefix <yours>`.
 
 Everything else defaults the PR to the one for the current branch. A number or a PR URL overrides.
 
@@ -173,11 +171,9 @@ which beats the defaults.
 | `remote_dir` | `~/.sand` | base dir on the box for the thread files |
 | `harness` | `claude` | agent CLI `pull` starts on the box: `claude` or `pi` |
 | `model` | the harness's own | model to pass it, in that harness's spelling |
-| `branch_prefix` | `$USER` | what `sand new` puts before `<issue>-<title>` |
+| `branch_prefix` | none, required | what `sand new` puts before `<issue>-<title>` |
 
-`host` has no default because it names one specific machine on your own network. If ssh refuses your
-Mac's local username, put the login user in the Mac's `~/.ssh/config` or in the host itself:
-`sand config set host ubuntu@<box>`.
+`host` and `branch_prefix` have no defaults: one names one specific machine on your own network, and the other names your branches. If ssh refuses your Mac's local username, put the login user in the Mac's `~/.ssh/config` or in the host itself: `sand config set host ubuntu@<box>`.
 
     sand config                   # print the file
     sand config init              # create it, or bring an existing one up to date

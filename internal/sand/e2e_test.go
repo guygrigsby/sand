@@ -152,8 +152,8 @@ func harness(t *testing.T) (remoteBase, ghLog string) {
 	t.Setenv("GH_CREATED", filepath.Join(dir, "pr-created"))
 	t.Setenv("GH_PR_BODY", filepath.Join(dir, "pr-body"))
 	t.Setenv("HOME", dir) // keep any real ~/.config/sand out of it
-	// Pinned, because it now defaults to $USER: a test that names a branch must not depend on
-	// who is running it. A test about the prefix itself sets its own after this.
+	// Pinned, because it is required: a test that names a branch must not depend on the config
+	// of whoever is running it. A test about the prefix itself sets its own after this.
 	t.Setenv("SAND_BRANCH_PREFIX", "guy")
 
 	flagHost = "box"
@@ -181,6 +181,41 @@ func read(t *testing.T, p string) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+func TestNewRequiresABranchPrefix(t *testing.T) {
+	dir, _ := signRepo(t)
+	mustRun(t, dir, "git", "switch", "--quiet", "main")
+	_, ghLog := harness(t)
+	t.Setenv("SAND_BRANCH_PREFIX", "")
+
+	err := runNew([]string{"42"})
+	if err == nil || !strings.Contains(err.Error(), "branch_prefix") {
+		t.Fatalf("want a branch_prefix error, got %v", err)
+	}
+	if b, readErr := os.ReadFile(ghLog); readErr == nil && strings.Contains(string(b), "issue view") {
+		t.Errorf("asked GitHub for an issue before the config was usable:\n%s", b)
+	} else if readErr != nil && !os.IsNotExist(readErr) {
+		t.Fatal(readErr)
+	}
+}
+
+func TestUpRequiresABranchPrefix(t *testing.T) {
+	dir, _ := signRepo(t)
+	mustRun(t, dir, "git", "switch", "--quiet", "main")
+	_, ghLog := harness(t)
+	t.Setenv("GH_PR_MISSING", "1")
+	t.Setenv("SAND_BRANCH_PREFIX", "")
+	flagPR = ""
+	mustRun(t, dir, "git", "switch", "--quiet", "-c", "topic")
+
+	_, _, _, err := setupUp(nil)
+	if err == nil || !strings.Contains(err.Error(), "branch_prefix") {
+		t.Fatalf("want a branch_prefix error, got %v", err)
+	}
+	if strings.Contains(read(t, ghLog), "issue view") {
+		t.Errorf("asked GitHub for an issue before the config was usable:\n%s", read(t, ghLog))
+	}
 }
 
 func TestNewCreatesIssueWorkspaceAndBranch(t *testing.T) {

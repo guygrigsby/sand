@@ -30,18 +30,21 @@ func TestIssueBranchRoundTripsUnderAnyPrefix(t *testing.T) {
 	}
 }
 
-// Unset means this machine's user, so a coworker who never touches the config still gets
-// their own name on their branches.
-func TestBranchPrefixDefaultsToTheUser(t *testing.T) {
+// Unset is not a name: guessing $USER made one Mac's branches `guygrigsby/...` while the
+// branches were actually `guy/...`, and `up` could no longer read its own handoff.
+func TestBranchPrefixIsRequired(t *testing.T) {
 	configHome(t)
 	t.Setenv("USER", "kim")
-	t.Setenv("LOGNAME", "")
+	t.Setenv("LOGNAME", "kim")
 	c, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.BranchPrefix != "kim" {
-		t.Errorf("branch_prefix = %q, want the $USER default", c.BranchPrefix)
+	if c.BranchPrefix != "" {
+		t.Errorf("branch_prefix = %q, want no default", c.BranchPrefix)
+	}
+	if v, err := Get("branch_prefix"); err != nil || v != "" {
+		t.Fatalf("get branch_prefix = %q, %v; want empty", v, err)
 	}
 	if _, err := Set([][2]string{{"branch_prefix", "kim/sand"}}); err != nil {
 		t.Fatal(err)

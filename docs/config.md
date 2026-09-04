@@ -1,15 +1,7 @@
 # Config: the keys and `sand config`
 
 
-`host` is the one setting with no default and the one thing a new Mac has to be told: it names
-one specific machine on your own network, so a compiled-in alias is either someone else's box or a name that
-resolves nowhere. `remote_dir` defaults to `~/.sand`, `harness` to `claude`, `branch_prefix` to
-`$USER` and `model` to nothing at all. Set them in `~/.config/sand/config.yaml`, or with `--host` / `--remote-dir`, or
-`SAND_<KEY>` in the environment, in that order of precedence. `harness` is which agent CLI
-`pull` starts (from the one harness table) and `model` is what to pass it, in that harness's own
-spelling. An empty model is a real answer: the harness picks, which is the only answer that does
-not go stale every time a model ships. Neither has a flag, because only `pull` reads them and it
-already has `--agent` for a one-off.
+`host` and `branch_prefix` are the settings with no default and the things a new Mac has to be told: one names one specific machine on your own network, so a compiled-in alias is either someone else's box or a name that resolves nowhere, and the other names your branches, so guessing it from `$USER` makes `sand up` unable to read branches `sand new` did not name. `remote_dir` defaults to `~/.sand`, `harness` to `claude` and `model` to nothing at all. Set them in `~/.config/sand/config.yaml`, or with `--host` / `--remote-dir`, or `SAND_<KEY>` in the environment, in that order of precedence. `harness` is which agent CLI `pull` starts (from the one harness table) and `model` is what to pass it, in that harness's own spelling. An empty model is a real answer: the harness picks, which is the only answer that does not go stale every time a model ships. Neither has a flag, because only `pull` reads them and it already has `--agent` for a one-off.
 
 `sand init` is what a person runs: it asks for every key, then checks the rest of the setup and
 names what is missing (see below). `sand config` prints the file, `sand config init` creates or
@@ -73,10 +65,7 @@ box checkout `git` can read (`boxCurrentBranch`, the same call signing uses), an
   reports one per run is a command run four times. Each prints as it is found and again in a
   numbered summary at the end, because the fixes are what happens next and scrolling back for
   them is what makes people skip one.
-- **`host` is asked twice if it has to be.** It is the one key with no default and the one
-  everything else needs, so an empty first answer gets a second question saying so. An
-  unattended run (no tty, EOF) still writes the file and warns, rather than blocking on a
-  prompt nobody will answer.
+- **`host` and `branch_prefix` are asked twice if they have to be.** They are the keys with no default, so an empty first answer gets a second question saying so. An unattended run (no tty, EOF) still writes the file and warns, rather than blocking on a prompt nobody will answer.
 - **Re-running is the point.** It keeps every answer and re-checks everything, so it doubles as
   the "why has this stopped working" command.
 
@@ -94,9 +83,7 @@ being printed by hand.
   this version's comments. Running it twice writes the same bytes, so a setup script never has
   to ask which case it is in. It used to refuse a file that existed, which left no command at
   all for adding a new key to an old config.
-- **`init` asks for the host, and takes no answer for an answer.** `--host` wins if given; an
-  unattended run (no tty, EOF, empty line) writes the file with the host unset and warns,
-  rather than blocking on a prompt nobody will answer or inventing a hostname.
+- **`init` asks for the host and branch prefix, and takes no answer for an answer.** `--host` wins if given; an unattended run (no tty, EOF, empty line) writes the file with them unset and warns, rather than blocking on a prompt nobody will answer or inventing a name.
 - **Only `Resolve` requires a host, and `Get` does not go through it.** `Get` answers per key
   off the file, the environment and the defaults. It used to call `Resolve`, which meant that
   once `host` lost its default, `sand config get harness` failed on any machine that had not

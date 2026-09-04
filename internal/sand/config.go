@@ -2,7 +2,6 @@ package sand
 
 import (
 	"bufio"
-	"cmp"
 	"fmt"
 	"io"
 	"os"
@@ -47,7 +46,7 @@ func configDefaults() map[string]string {
 		"remote_dir":    defaultRemoteDir,
 		"harness":       defaultHarness,
 		"model":         "",
-		"branch_prefix": cmp.Or(os.Getenv("USER"), os.Getenv("LOGNAME")),
+		"branch_prefix": "",
 	}
 }
 
@@ -156,10 +155,8 @@ var configDoc = map[string]string{
 		"# `pull --no-agent` starts nothing; `pull --agent '<cmd>'` runs something else once.",
 	"model": "model to run it with, in that harness's own spelling. Empty means the\n" +
 		"# harness's default.",
-	// No "unset means $USER" here: writeConfig names every default under its key, and this one
-	// resolves to a name, so saying both put "Unset means $USER. Unset means guy." in the file.
 	"branch_prefix": "what `sand new` puts before <issue>-<title>, and what `sand up` reads\n" +
-		"# the issue number back out of.",
+		"# the issue number back out of. Required; there is no default.",
 }
 
 // configField is one settable key: its name in the file and the field behind it.
@@ -250,8 +247,8 @@ func Set(pairs [][2]string) (string, error) {
 // default would never reach this machine. The keys are present and empty, with the default
 // named in the comment above them.
 //
-// The host is the exception, being the one key with no default. It is asked for when
-// neither the flag nor the file already answers.
+// Host and branch prefix are the exceptions, being the keys with no default. They are asked
+// for when neither the flag nor the file already answers.
 func InitConfig(host string, in io.Reader, out io.Writer) (string, error) {
 	p := ConfigPath()
 	c, err := loadFile()
@@ -261,14 +258,28 @@ func InitConfig(host string, in io.Reader, out io.Writer) (string, error) {
 	if host != "" {
 		c.Host = host
 	}
-	if c.Host == "" {
-		var answers *bufio.Reader
-		if in != nil {
-			answers = bufio.NewReader(in)
-		}
-		c.Host = ask(answers, out, "sandbox ssh alias or user@host", "")
+	var answers *bufio.Reader
+	if in != nil {
+		answers = bufio.NewReader(in)
 	}
+	askRequired(&c, answers, out)
 	return p, writeConfig(c)
+}
+
+// askRequired gives the no-default keys a second, named question. The first pass can keep an
+// empty answer; these cannot, because the commands that need them have nothing safe to guess.
+func askRequired(c *Config, in *bufio.Reader, out io.Writer) {
+	if in == nil {
+		return
+	}
+	if c.Host == "" {
+		fmt.Fprintln(out, "\nhost names the one machine this Mac drives, and has no default.")
+		c.Host = ask(in, out, "sandbox ssh alias or user@host", "")
+	}
+	if branchPrefix(c.BranchPrefix) == "" {
+		fmt.Fprintln(out, "\nbranch_prefix names your issue branches, and has no default.")
+		c.BranchPrefix = ask(in, out, "branch prefix (for example guy)", "")
+	}
 }
 
 // ask reads one line, showing current as what an empty answer keeps. An empty answer, EOF or
