@@ -58,8 +58,8 @@ func root() *cobra.Command {
 	}
 	c.PersistentFlags().StringVar(&flagHost, "host", "", "sandbox ssh alias or user@host (overrides config)")
 	c.PersistentFlags().StringVar(&flagRemoteDir, "remote-dir", "", "base dir on the sandbox (overrides config)")
-	c.AddCommand(ciCmd(), commentsCmd(), configCmd(), initCmd(), newCmd(), shotCmd(), signCmd(),
-		skillCmd(), statusCmd(), upCmd())
+	c.AddCommand(ciCmd(), cleanupCmd(), commentsCmd(), configCmd(), initCmd(), newCmd(), shotCmd(),
+		signCmd(), skillCmd(), statusCmd(), upCmd())
 	return c
 }
 
@@ -304,6 +304,20 @@ func ensurePushed(branch string) error {
 	}
 	fmt.Printf("  %s → %s (was %s)\n", ref, short(local), cmp.Or(short(remote), "absent"))
 	return nil
+}
+
+func cleanupCmd() *cobra.Command {
+	var yes bool
+	c := &cobra.Command{
+		Use:   "cleanup",
+		Short: "Delete recovery branches left by signing and importing",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cleanup(cleanupOpts{Yes: yes, In: cmd.InOrStdin(), Out: cmd.OutOrStdout()})
+		},
+	}
+	c.Flags().BoolVarP(&yes, "yes", "y", false, "delete without confirmation")
+	return c
 }
 
 func signCmd() *cobra.Command {

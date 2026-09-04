@@ -137,7 +137,8 @@ chase a hash is wasted work.
 If a commit never reaches the branch or gets dropped later, the Mac cannot match it and posts the
 reply without a dead link. Commit fixes on the PR branch and do not amend or drop them afterwards
 when the link matters. Signing before posting is still not optional, which is why the Mac runs
-`sand up` rather than posting on its own.
+`sand up` rather than posting on its own. Recovery branches from signing and importing belong to
+the Mac; `sand cleanup` lists and deletes them there when they are no longer needed.
 
 ## Failing CI
 
