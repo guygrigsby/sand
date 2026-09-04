@@ -134,10 +134,11 @@ branch when it posts, and when signing has replaced it, it posts the replacement
 (same tree, same subject, new hash). Nothing is expected of you about signing, and re-pulling to
 chase a hash is wasted work.
 
-Two things do fall out of it. A commit that never reaches the branch cannot be matched, so the
-reply about it is held back rather than posted with a dead link: commit your fix on the branch
-the PR is for, and do not amend or drop it afterwards. And signing before posting is not
-optional, which is why the Mac runs `sand up` rather than posting on its own.
+If a commit never reaches the branch or gets dropped later, the Mac cannot match it and posts the
+reply without a dead link. Commit fixes on the PR branch and do not amend or drop them afterwards
+when the link matters. Signing before posting is still not optional, which is why the Mac runs
+`sand up` rather than posting on its own. Recovery branches from signing and importing belong to
+the Mac; `sand cleanup` lists and deletes them there when they are no longer needed.
 
 ## Failing CI
 

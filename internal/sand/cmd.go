@@ -58,8 +58,8 @@ func root() *cobra.Command {
 	}
 	c.PersistentFlags().StringVar(&flagHost, "host", "", "sandbox ssh alias or user@host (overrides config)")
 	c.PersistentFlags().StringVar(&flagRemoteDir, "remote-dir", "", "base dir on the sandbox (overrides config)")
-	c.AddCommand(ciCmd(), commentsCmd(), configCmd(), initCmd(), newCmd(), shotCmd(), signCmd(),
-		skillCmd(), statusCmd(), upCmd())
+	c.AddCommand(ciCmd(), cleanupCmd(), commentsCmd(), configCmd(), initCmd(), newCmd(), shotCmd(),
+		signCmd(), skillCmd(), statusCmd(), upCmd())
 	return c
 }
 
@@ -304,6 +304,20 @@ func ensurePushed(branch string) error {
 	}
 	fmt.Printf("  %s → %s (was %s)\n", ref, short(local), cmp.Or(short(remote), "absent"))
 	return nil
+}
+
+func cleanupCmd() *cobra.Command {
+	var yes bool
+	c := &cobra.Command{
+		Use:   "cleanup",
+		Short: "Delete recovery branches left by signing and importing",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cleanup(cleanupOpts{Yes: yes, In: cmd.InOrStdin(), Out: cmd.OutOrStdout()})
+		},
+	}
+	c.Flags().BoolVarP(&yes, "yes", "y", false, "delete without confirmation")
+	return c
 }
 
 func signCmd() *cobra.Command {
@@ -1288,10 +1302,8 @@ func runPush(args []string) error {
 				t.Meta.Commit = h
 			case commitGone:
 				warn(fmt.Sprintf("%s: commit %s is not on %s and nothing there matches it; "+
-					"left pending rather than posting a dead link (re-pull to let the agent recheck)",
-					name, t.Meta.Commit, branchRef))
-				failed++
-				continue
+					"posting the reply without a dead link", name, t.Meta.Commit, branchRef))
+				t.Meta.Commit = ""
 			case commitAmbiguous:
 				warn(fmt.Sprintf("%s: %s matches more than one commit on %s (%s); left pending rather "+
 					"than quoting a guess (say which in `commit:` and re-run)",

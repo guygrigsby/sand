@@ -96,6 +96,7 @@ Everything else defaults the PR to the one for the current branch. A number or a
 Finer grained, if you want the steps apart:
 
     sand sign [branch]            # sign what is not signed yet, offer to push, realign the box
+    sand cleanup                  # delete all recovery branches left by sign and import
     sand comments push            # post the drafted replies
 
 And the one thing that goes the other way for a different reason:
@@ -196,8 +197,8 @@ carries a signature. So `sand` fails closed wherever it cannot keep that true.
 - No GitHub token ever enters the program. `gh` holds the auth, on the Mac only.
 - The box gets no signing key and never talks to GitHub. The Mac signs and posts, and never
   edits code. Neither half can do the other's job by accident.
-- `push` refuses to post while GitHub reports any commit of the PR as unverified, and holds back
-  any single reply whose `commit:` it cannot resolve to exactly one commit on the pushed branch.
+- `push` refuses to post while GitHub reports any commit of the PR as unverified. It re-points a
+  signed commit, drops a link to a commit known to be gone and holds back an ambiguous match.
 - `push` asks GitHub what it has already said on each thread before posting, so an interrupted
   run re-marks instead of posting twice. If that check cannot be made, it posts nothing.
 - `sign` refuses commits whose author or committer is not your git identity, and shows you the

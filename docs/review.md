@@ -89,7 +89,7 @@ remotes can change the answer.
   existing exactly when the branch becomes postable, and every earlier round's replies would
   link to nothing. Before posting, each recorded commit is looked up on `<remote>/<branch>`:
   on it already, quote it as is; missing but matched by tree and subject, quote the replacement
-  and say so; missing with no match, hold that one reply back and count it failed; unknowable
+  and say so; missing with no match, warn and post the reply without a dead link; unknowable
   here (no such ref, no such object), warn and post anyway, because a hash this checkout cannot
   reason about is not evidence that it is wrong; matched by more than one commit, hold that reply
   too, because tree plus subject is an identity claim and a duplicate on the branch (a
