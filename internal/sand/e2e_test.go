@@ -729,6 +729,42 @@ func TestPushRepointsTheHashSigningMoved(t *testing.T) {
 	}
 }
 
+// A recorded commit can disappear when review work is amended or superseded. The reply still
+// belongs on the thread; only the dead commit link must be dropped.
+func TestPushPostsWithoutACommitThatLeftTheBranch(t *testing.T) {
+	dir, _ := signRepo(t)
+	mustRun(t, dir, "git", "switch", "--quiet", "-c", "topic")
+	mustRun(t, dir, "git", "switch", "--quiet", "-c", "discarded")
+	commit(t, dir, "discarded.txt", "gone\n", "sand: discarded fix")
+	discarded := mustRun(t, dir, "git", "rev-parse", "--short=7", "HEAD")
+	mustRun(t, dir, "git", "switch", "--quiet", "topic")
+	mustRun(t, dir, "git", "push", "--quiet", "origin", "topic")
+
+	remoteBase, ghLog := harness(t)
+	if err := runPull(nil); err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	p := filepath.Join(remoteBase, "o", "r", "pr-42", "c-2043881.md")
+	drafted := strings.Replace(read(t, p), `commit: ""`, "commit: "+discarded, 1)
+	if err := os.WriteFile(p, []byte(drafted+"\nClosed the fd in both paths.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runPush(nil); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	log := read(t, ghLog)
+	if !strings.Contains(log, "body=Closed the fd in both paths.") {
+		t.Errorf("reply was not posted:\n%s", log)
+	}
+	if strings.Contains(log, discarded) {
+		t.Errorf("reply linked commit %s after it left the branch:\n%s", discarded, log)
+	}
+	if got := read(t, p); !strings.Contains(got, "status: sent") {
+		t.Errorf("thread was not marked sent:\n%s", got)
+	}
+}
+
 // `sand up` is the one command for the Mac's half, so the test is the whole half: an answered
 // thread on the box, unsigned commits on the branch, and nothing done by hand.
 func TestPushAliasesUp(t *testing.T) {

@@ -1288,10 +1288,8 @@ func runPush(args []string) error {
 				t.Meta.Commit = h
 			case commitGone:
 				warn(fmt.Sprintf("%s: commit %s is not on %s and nothing there matches it; "+
-					"left pending rather than posting a dead link (re-pull to let the agent recheck)",
-					name, t.Meta.Commit, branchRef))
-				failed++
-				continue
+					"posting the reply without a dead link", name, t.Meta.Commit, branchRef))
+				t.Meta.Commit = ""
 			case commitAmbiguous:
 				warn(fmt.Sprintf("%s: %s matches more than one commit on %s (%s); left pending rather "+
 					"than quoting a guess (say which in `commit:` and re-run)",
