@@ -60,6 +60,12 @@ box commits. Creating a ref is bookkeeping, not source editing.
   branch name (`<issue>-<title>`) rather than a stop. One implementation reads and writes it
   (`branchPrefix`), so the name `new` creates is by construction the name `up` parses.
 
+## Creating a PR: `sand pr create`
+
+`pr create` closes the gap between finished code on the box and prose GitHub can open. It works from any current branch with no open PR. The configured agent starts in the box checkout under the same repo lock as review and CI agents, reads the full branch diff and commit history and uses the voice skill's `pr-description` register: `~/.claude/voice/rules.md`, `~/.claude/voice/voice.md` and matching corpus samples. A branch named for an issue also gets its existing `issue.md`; other branches need no issue. The agent writes a one-line `pr-title.txt` and byte-preserved GitHub Markdown to `pr-description.md` under the repo's sand directory. Code fences need no transport encoding or parsing because the body stays a file through `gh pr create --body-file`.
+
+Once the files exist, it runs the same safe publish path as `up`: sign, push, open through `gh` on the Mac and ask GitHub to verify every commit. An existing PR is a stop. A missing title, multiline title, missing body or failed agent is also a stop before publication. `--dry-run` starts no agent and changes nothing. Generated prose cannot be previewed before it exists, so it reports the agent and publish steps it would run.
+
 ## The whole Mac side: `sand up [pr]`
 
 One command for everything the Mac owes a review round, in the only order that is safe, each

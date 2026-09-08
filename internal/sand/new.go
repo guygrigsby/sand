@@ -17,6 +17,13 @@ func (t Target) issuePath(base string) string {
 	return path.Join(base, segment(t.Owner), segment(t.Repo), fmt.Sprintf("issue-%d", t.Number))
 }
 
+func (t Target) prDraftPath(base string) string {
+	if t.Number > 0 {
+		return t.issuePath(base)
+	}
+	return path.Join(base, segment(t.Owner), segment(t.Repo), "pr-draft")
+}
+
 // issueBranch is the one branch name sand both writes and reads: `new` creates it, and `up`
 // takes the issue number back out of it when there is no PR yet. The prefix is config
 // (branch_prefix, defaulting to $USER) rather than the `guy/` it was compiled with, because a
@@ -122,6 +129,28 @@ func runNew(args []string) error {
 	return nil
 }
 
+func setupPRCreate() (Config, Target, error) {
+	cfg, err := Resolve(flagHost, flagRemoteDir)
+	if err != nil {
+		return cfg, Target{}, err
+	}
+	target, found, err := currentBranchPR()
+	if err != nil {
+		return cfg, Target{}, err
+	}
+	if found {
+		return cfg, Target{}, fmt.Errorf("%s already has PR #%d", target.Branch, target.Number)
+	}
+	if number, ok := issueNumberFromBranch(cfg.BranchPrefix, target.Branch); ok {
+		issue, err := fetchIssue(number)
+		if err != nil {
+			return cfg, Target{}, err
+		}
+		target.Number, target.Title, target.URL = number, issue.Title, issue.URL
+	}
+	return cfg, target, nil
+}
+
 func setupUp(args []string) (Config, Target, bool, error) {
 	cfg, err := Resolve(flagHost, flagRemoteDir)
 	if err != nil {
@@ -163,17 +192,43 @@ func setupUp(args []string) (Config, Target, bool, error) {
 	return cfg, Target{Owner: issue.Owner, Repo: issue.Repo, Number: number, Title: issue.Title, URL: issue.URL, Branch: branch}, true, nil
 }
 
-func loadPRDescription(cfg Config, target Target) ([]byte, error) {
-	dir, err := fetchDir(cfg.Host, target.issuePath(cfg.RemoteDir))
+type prDraft struct {
+	Title string
+	Body  []byte
+}
+
+func clearPRDraft(cfg Config, target Target) error {
+	dir := target.prDraftPath(cfg.RemoteDir)
+	remote := fmt.Sprintf("rm -f -- %s %s",
+		remoteQuote(path.Join(dir, "pr-title.txt")),
+		remoteQuote(path.Join(dir, "pr-description.md")))
+	if out, err := exec.Command(sshBin(), cfg.Host, remote).CombinedOutput(); err != nil {
+		return fmt.Errorf("clearing the old PR draft on %s: %w: %s", cfg.Host, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func loadPRDraft(cfg Config, target Target, requireTitle bool) (prDraft, error) {
+	remote := target.prDraftPath(cfg.RemoteDir)
+	dir, err := fetchDir(cfg.Host, remote)
 	if err != nil {
-		return nil, err
+		return prDraft{}, err
 	}
 	defer os.RemoveAll(dir)
 	body, err := os.ReadFile(filepath.Join(dir, "pr-description.md"))
 	if err != nil || strings.TrimSpace(string(body)) == "" {
-		return nil, fmt.Errorf("%s:%s/pr-description.md is missing or empty; have the sandbox agent write the PR description first", cfg.Host, target.issuePath(cfg.RemoteDir))
+		return prDraft{}, fmt.Errorf("%s:%s/pr-description.md is missing or empty; have the sandbox agent write the PR description first", cfg.Host, remote)
 	}
-	return body, nil
+	title := target.Title
+	if b, titleErr := os.ReadFile(filepath.Join(dir, "pr-title.txt")); titleErr == nil {
+		title = strings.TrimSpace(string(b))
+	} else if requireTitle || !os.IsNotExist(titleErr) {
+		return prDraft{}, fmt.Errorf("reading %s:%s/pr-title.txt: %w", cfg.Host, remote, titleErr)
+	}
+	if title == "" || strings.ContainsAny(title, "\r\n") {
+		return prDraft{}, fmt.Errorf("%s:%s/pr-title.txt must contain one non-empty line", cfg.Host, remote)
+	}
+	return prDraft{Title: title, Body: body}, nil
 }
 
 func createPullRequest(target Target, description []byte) (Target, error) {
