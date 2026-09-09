@@ -410,7 +410,7 @@ func Fetch(t *Target, warn func(string)) ([]Thread, []Review, error) {
 			}
 			for _, c := range n.Comments.Nodes {
 				th.Comments = append(th.Comments, Comment{
-					Author: c.Author.Login, CreatedAt: c.CreatedAt, Body: c.Body,
+					Author: c.Author.Login, CreatedAt: c.CreatedAt, Body: c.Body, URL: c.URL,
 				})
 			}
 			threads = append(threads, th)

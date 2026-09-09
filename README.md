@@ -89,7 +89,7 @@ Everything else defaults the PR to the one for the current branch. A number or a
     sand ci pull                  # the PR's failing checks and their logs, same trip
     sand up                       # sign, push, open a missing PR, verify, post replies
     sand push                     # alias for sand up
-    sand up --dry-run             # all four steps, changes nothing anywhere
+    sand up --dry-run             # preview all four steps; still imports and fetches locally
 
 Finer grained, if you want the steps apart:
 
@@ -125,10 +125,10 @@ lineage an earlier signing round replaced is refused outright, before anything i
 commits are unsigned copies of commits already on the remote, and pushing a second copy is how
 the two histories drift apart unnoticed.
 
-One agent per repo checkout on the box, enforced with `flock` there: a second `pull` for
-another PR of the same repo, or a `ci pull` for the same one, refuses to start an agent while
-the first is working, rather than let two edit one tree. `--no-agent` writes the files and
-leaves it alone.
+One agent per repo checkout on the box, enforced with `flock` there. Comment pull, CI pull
+and comment push hold the same lock while syncing files, so they refuse while an agent is
+working. This includes `--no-agent`, which skips agent startup but still protects drafts.
+Push uploads only the reply files it marked sent, preserving unrelated CI files.
 
 With no PR for the current `<you>/<issue>-...` branch, `up` reads the box-authored
 `issue-<n>/pr-description.md` after signing and pushing, opens the PR, then verifies it. Missing
@@ -137,13 +137,13 @@ or empty prose is a stop rather than a generated body.
 `sand status` is the one to run when you do not know which of those you want. It reads this Mac,
 the box and GitHub at once and prints one `next:` line: the branch and unsigned count here, the
 box's branch, dirty count and whether an agent holds the lock there, how many replies are drafted
-and how many checks have notes, and what GitHub says is unresolved, failing or unverified. It
+and how many checks are marked fixed, and what GitHub says is unresolved, failing or unverified. It
 changes nothing anywhere. It does fetch, from the remote and from the box, because the thing it
 is really looking for is commits on the box that are unsigned copies of commits already pushed,
 and that is a question about trees rather than hashes. A branch with no PR is fine.
 
-`comments pull` is safe to re-run. Replies already drafted on the box survive, and a thread
-already posted stays `status: sent` and is not posted twice.
+`comments pull` preserves drafted replies. A posted thread stays `status: sent` until a new
+reviewer follow-up reopens it with an empty reply slot. Earlier replies stay in the conversation.
 
 The files land in `<remote_dir>/<owner>/<repo>/pr-<n>/` on the box: `index.md` plus one
 `c-<comment-id>.md` per thread. An agent on the box reads them through the skill, which the
@@ -159,6 +159,10 @@ There is no `ci push`. A red check is answered by a commit, not a comment, so th
 box through `sand up` like everything else and CI running again is the verdict. The agent writes
 what it did under `## notes` in the check's file, which is for the next round to read, not for
 GitHub.
+
+CI notes survive re-pulls, but notes alone do not mark a check fixed. A new failing run resets
+the previous run's fixed status so an unsuccessful fix gets another attempt. Check files
+distinguish workflows and names, including names that would sanitize to the same filename.
 
 ## Config
 

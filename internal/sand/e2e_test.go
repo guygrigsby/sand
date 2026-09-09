@@ -488,9 +488,15 @@ func TestPullSaysWhenTheHarnessIsMissingOnTheBox(t *testing.T) {
 			t.Errorf("error does not name %q: %v", want, err)
 		}
 	}
-	// And nothing was started, so the lock was never taken either.
-	if _, statErr := os.Stat(agentLock(remoteBase, "r")); statErr == nil {
-		t.Error("took the lock for an agent that could not run")
+	// Pull took the lock to sync its files, but must release it even when the
+	// subsequent agent cannot start. The persistent lockfile is not ownership.
+	f, err := os.OpenFile(agentLock(remoteBase, "r"), os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatalf("left the synchronization lock held: %v", err)
 	}
 }
 

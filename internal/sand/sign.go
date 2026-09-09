@@ -163,6 +163,9 @@ func Sign(o SignOpts) (SignResult, error) {
 	}
 	res.Head = head
 	imported := head // what the box had when this run started, for alignBox
+	// Pin the lease before signing. A background fetch must not authorize replacing
+	// commits that appeared while the operator was reviewing or signing this head.
+	remoteBefore, _ := g.capture("rev-parse", "--verify", "--quiet", "refs/remotes/"+o.Remote+"/"+branch)
 	commits, err := g.branchCommits(head, base)
 	if err != nil {
 		return res, err
@@ -185,7 +188,7 @@ func Sign(o SignOpts) (SignResult, error) {
 	fmt.Fprintf(o.Out, "Comparison base: %s (%s)\n", base, baseShort)
 	if len(dirty) == 0 {
 		fmt.Fprintf(o.Out, "All %d commit(s) unique to %s are signed already; nothing to sign.\n", count, branch)
-		return res, publish(g, o, answers, &res, branch, imported, head)
+		return res, publish(g, o, answers, &res, branch, imported, head, remoteBefore)
 	}
 	fmt.Fprintf(o.Out, "About to sign %d of %d commit(s) unique to %s\n", len(dirty), count, branch)
 	if len(clean) > 0 {
@@ -234,7 +237,7 @@ func Sign(o SignOpts) (SignResult, error) {
 			// The Mac signs what a rebase replays (commit.gpgsign), so the repair can
 			// leave nothing to do.
 			fmt.Fprintf(o.Out, "All %d commit(s) unique to %s are signed already; nothing to sign.\n", count, branch)
-			return res, publish(g, o, answers, &res, branch, imported, head)
+			return res, publish(g, o, answers, &res, branch, imported, head, remoteBefore)
 		}
 		fmt.Fprintf(o.Out, "Repaired: %s is now %s, %d commit(s) to sign.\n", branch, short(head), len(dirty))
 	}
@@ -322,7 +325,7 @@ func Sign(o SignOpts) (SignResult, error) {
 	}
 	fmt.Fprintf(o.Out, "\nRecovery branch retained as: %s\n", backup)
 
-	return res, publish(g, o, answers, &res, branch, imported, head)
+	return res, publish(g, o, answers, &res, branch, imported, head, remoteBefore)
 }
 
 // publish is the tail of a run: offer the push to the remote, and once it lands, put the same
@@ -338,23 +341,24 @@ func Sign(o SignOpts) (SignResult, error) {
 // Nothing is pushed when the remote already holds this head, and nothing is pushed when the
 // remote holds commits this branch does not: a lease would let that rewind, and a remote ahead
 // of a fully-signed branch means something happened that this run cannot account for.
-func publish(g gitCmd, o SignOpts, answers *bufio.Reader, res *SignResult, branch, imported, head string) error {
+func publish(g gitCmd, o SignOpts, answers *bufio.Reader, res *SignResult, branch, imported, head, remoteBefore string) error {
+	if o.DryRun {
+		fmt.Fprintf(o.Out, "dry run: nothing pushed to %s or the box\n", o.Remote)
+		return nil
+	}
 	ref := o.Remote + "/" + branch
-	if g.refExists(ref) {
-		switch remoteHead, err := g.capture("rev-parse", ref); {
-		case err != nil:
-			return err
-		case remoteHead == head:
+	if remoteBefore != "" {
+		switch {
+		case remoteBefore == head:
 			// Still realigned, and the invariant holds: the box is only moved to a history the
 			// remote has, and here the remote has it already.
 			fmt.Fprintf(o.Out, "%s is already at %s; nothing to push.\n", ref, short(head))
 			res.BoxAligned = alignBox(g, o, branch, imported, head)
 			return nil
-		case exec.Command("git", "merge-base", "--is-ancestor", remoteHead, head).Run() != nil:
-			fmt.Fprintf(o.Out, "\n%s is at %s, which is not an ancestor of %s: it holds commit(s) this\n"+
-				"branch does not, so nothing was pushed. What they are:\n  git log --oneline %s --not %s\n",
-				ref, short(remoteHead), short(head), ref, branch)
-			return nil
+		case exec.Command("git", "merge-base", "--is-ancestor", remoteBefore, head).Run() != nil &&
+			exec.Command("git", "merge-base", "--is-ancestor", remoteBefore, imported).Run() != nil:
+			return fmt.Errorf("refusing to push: %s at %s holds commits absent from both the imported and signed branch; nothing was pushed\n  git log --oneline %s --not %s",
+				ref, short(remoteBefore), ref, branch)
 		}
 	}
 
@@ -370,7 +374,8 @@ func publish(g gitCmd, o SignOpts, answers *bufio.Reader, res *SignResult, branc
 		}
 		return nil
 	}
-	if err := g.run("push", "--force-with-lease", o.Remote, branch); err != nil {
+	lease := "--force-with-lease=refs/heads/" + branch + ":" + remoteBefore
+	if err := g.run("push", lease, o.Remote, head+":refs/heads/"+branch); err != nil {
 		return err
 	}
 	res.Pushed = true
@@ -859,8 +864,11 @@ func duplicatedOnRemote(g gitCmd, commits []string, remoteBranch, remoteBase str
 		if !ok {
 			return nil, fmt.Errorf("git did not report a tree and subject for %s", short(sha))
 		}
-		if twins := pushed[id]; len(twins) > 0 {
-			dups = append(dups, dupCommit{SHA: sha, Twin: twins[0], On: on[id], Subject: identitySubject(id)})
+		for _, twin := range pushed[id] {
+			if twin != sha {
+				dups = append(dups, dupCommit{SHA: sha, Twin: twin, On: on[id], Subject: identitySubject(id)})
+				break
+			}
 		}
 	}
 	return dups, nil

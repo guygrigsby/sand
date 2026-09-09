@@ -62,10 +62,10 @@ step verified before the next runs and printed so a watching human can check it:
    back on the box once it is on the remote. A rewrite that reached GitHub and not the box gets
    its own warning line: it is the one outcome here that breaks the *next* round rather than this
    one, so it must not be left in the signing output for someone to notice.
-2. `push` `--force-with-lease`, then re-read the remote ref to prove it moved. Signing pushes
+2. `push` any remaining fast-forward, then re-read the remote ref to prove it moved. Signing pushes
    what it rewrote and a fully-signed branch the remote is behind, so on most runs this step
-   reads "already at" and is the proof rather than the push. It still has work when something
-   declined the push at step 1, or when the remote holds commits the branch does not.
+   reads "already at" and is the proof rather than the push. Only signing may force a rewrite,
+   leased against the remote hash it checked. Remote-only commits stop the run.
 3. `verify` that GitHub reports every commit of the PR as verified. A failure here is almost
    always the signing key missing from the GitHub account, so the error says that.
 4. `replies`: `comments push`.
@@ -76,7 +76,8 @@ then runs the same GitHub signature verification. A missing description stops th
 is an alias for `up` so both entry points have the same ordering and checks.
 
 Flags: `--pr`, `--remote`, `--base`, `-y/--yes`, `--allow-other-authors`, `--dry-run`. The dry run covers all four steps
-at once and changes nothing anywhere. Declining the rewrite at step 1 stops the run rather than
+at once: it imports the box branch and fetches locally, but signs, pushes and posts nothing.
+Declining the rewrite at step 1 stops the run rather than
 posting replies about commits that were never signed.
 
 The order is the whole point: a reply quotes a commit hash, signing changes commit hashes, so

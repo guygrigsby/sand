@@ -201,3 +201,12 @@ history on the box. Flags: `--remote` (origin), `--base` (main), `--yes`, `--pus
   base: what would be signed is not knowable without them. So the import's ref moves and its
   `-before-import-` branch happen in a dry run too, which is the honest answer either way, since
   the alternative is a preview of a branch the box does not have.
+
+- **Publishing checks the imported history as well as the signed result.** A published unsigned
+  commit is the same commit, not a duplicate of itself. Its signed replacement may be pushed
+  when the remote head is an ancestor of what was imported or of the result. A remote-only
+  commit is a refusal returned to `sand up`, whose fallback push can only fast-forward.
+  The push leases against the remote hash captured before signing and names the verified
+  result SHA explicitly. A background fetch cannot authorize overwriting newer work.
+- **The publish path checks `--dry-run` too.** An already signed branch skips the rewrite but
+  can still need publishing. A preview cannot push it or realign the box, even with `--push`.

@@ -59,7 +59,7 @@ func TestCIPullWritesTheFailingChecks(t *testing.T) {
 	}
 
 	dir := ciDir(remoteBase)
-	build := read(t, filepath.Join(dir, "ci-build.md"))
+	build := read(t, filepath.Join(dir, (CIFailure{Meta: CIMeta{Workflow: "CI", Check: "build"}}).Filename()))
 	for _, want := range []string{
 		"check: build",
 		"bucket: fail",
@@ -74,13 +74,13 @@ func TestCIPullWritesTheFailingChecks(t *testing.T) {
 	}
 
 	// A name with a slash and a space cannot become a path or two arguments.
-	lint := filepath.Join(dir, "ci-lint-go-1.26.md")
+	lint := filepath.Join(dir, (CIFailure{Meta: CIMeta{Workflow: "CI", Check: "lint / go 1.26"}}).Filename())
 	if _, err := os.Stat(lint); err != nil {
 		t.Errorf("no file for the check with a slash in its name: %v", err)
 	}
 
 	// Buildkite posts a commit status, and this machine has no client for it: link, no log.
-	bk := read(t, filepath.Join(dir, "ci-buildkite-build.md"))
+	bk := read(t, filepath.Join(dir, (CIFailure{Meta: CIMeta{Workflow: "", Check: "buildkite/build"}}).Filename()))
 	if !strings.Contains(bk, "https://buildkite.com/o/r/builds/12") {
 		t.Errorf("buildkite file lost its link:\n%s", bk)
 	}
@@ -92,12 +92,12 @@ func TestCIPullWritesTheFailingChecks(t *testing.T) {
 	}
 
 	// A passing check is not something to fix, so it gets no file.
-	if _, err := os.Stat(filepath.Join(dir, "ci-vet.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(dir, (CIFailure{Meta: CIMeta{Workflow: "CI", Check: "vet"}}).Filename())); !os.IsNotExist(err) {
 		t.Errorf("wrote a file for a passing check: %v", err)
 	}
 
 	index := read(t, filepath.Join(dir, "index.md"))
-	for _, want := range []string{"o/r#42", "ci-build.md", "buildkite/build", "sand up"} {
+	for _, want := range []string{"o/r#42", (CIFailure{Meta: CIMeta{Workflow: "CI", Check: "build"}}).Filename(), "buildkite/build", "sand up"} {
 		if !strings.Contains(index, want) {
 			t.Errorf("index missing %q:\n%s", want, index)
 		}
@@ -134,7 +134,7 @@ func TestCIPullTailsTheLogAndSaysSo(t *testing.T) {
 		t.Fatalf("ci pull: %v", err)
 	}
 
-	got := read(t, filepath.Join(ciDir(remoteBase), "ci-build.md"))
+	got := read(t, filepath.Join(ciDir(remoteBase), (CIFailure{Meta: CIMeta{Workflow: "CI", Check: "build"}}).Filename()))
 	if !strings.Contains(got, "FAIL: the last line") {
 		t.Errorf("kept the head of the log instead of the tail:\n%s", got)
 	}
@@ -155,7 +155,7 @@ func TestCIPullKeepsNotesAndRefreshesAGreenCheck(t *testing.T) {
 		t.Fatalf("ci pull: %v", err)
 	}
 
-	p := filepath.Join(ciDir(remoteBase), "ci-build.md")
+	p := filepath.Join(ciDir(remoteBase), (CIFailure{Meta: CIMeta{Workflow: "CI", Check: "build"}}).Filename())
 	body := strings.Replace(read(t, p), "status: pending", "status: fixed", 1)
 	body = strings.Replace(body, "commit: \"\"", "commit: deadbee", 1)
 	if err := os.WriteFile(p, []byte(body+"\nWas a missing import.\n"), 0o644); err != nil {
@@ -305,5 +305,128 @@ func TestFetchChecksIgnoresGHsExitStatus(t *testing.T) {
 	}
 	if checks[2].RunID != "" {
 		t.Errorf("read an Actions run id out of a buildkite link: %q", checks[2].RunID)
+	}
+}
+
+func TestCIRetryAfterFailedFix(t *testing.T) {
+	base, _ := harness(t)
+	captureStdout(t)
+	if err := runCIPull(nil); err != nil {
+		t.Fatal(err)
+	}
+	paths, _ := filepath.Glob(filepath.Join(ciDir(base), "ci-*.md"))
+	for _, p := range paths {
+		body := strings.Replace(read(t, p), "status: pending", "status: fixed", 1)
+		if err := os.WriteFile(p, []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setChecks(t, strings.ReplaceAll(checksFixture, "7788", "8899"))
+	flagNoAgent = false
+	flagAgent = "/bin/true"
+	flagRepoDir = t.TempDir()
+	out := captureStdout(t)
+	if err := runCIPull(nil); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out(), "nothing to fix, so no agent started") {
+		t.Fatal("fresh failing CI run was skipped because old run was marked fixed")
+	}
+}
+func TestCINotesAreNotAFix(t *testing.T) {
+	base, _ := harness(t)
+	captureStdout(t)
+	if err := runCIPull(nil); err != nil {
+		t.Fatal(err)
+	}
+	paths, _ := filepath.Glob(filepath.Join(ciDir(base), "ci-*.md"))
+	for _, p := range paths {
+		if err := os.WriteFile(p, []byte(read(t, p)+"\nInvestigating; still broken.\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	flagNoAgent = false
+	flagAgent = "/bin/true"
+	flagRepoDir = t.TempDir()
+	out := captureStdout(t)
+	if err := runCIPull(nil); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out(), "nothing to fix, so no agent started") {
+		t.Fatal("pending checks with investigation notes skipped")
+	}
+}
+func TestCICollidingNames(t *testing.T) {
+	base, _ := harness(t)
+	captureStdout(t)
+	setChecks(t, `[{"name":"build/linux","bucket":"fail","link":"https://example.test/a"},{"name":"build:linux","bucket":"fail","link":"https://example.test/b"}]`)
+	if err := runCIPull(nil); err != nil {
+		t.Fatal(err)
+	}
+	paths, err := filepath.Glob(filepath.Join(ciDir(base), "ci-*.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 2 {
+		t.Fatalf("2 failing checks produced %d file(s)", len(paths))
+	}
+}
+
+func TestCISameNameDifferentWorkflows(t *testing.T) {
+	base, _ := harness(t)
+	captureStdout(t)
+	setChecks(t, `[{"name":"build","workflow":"Linux","bucket":"fail","link":"https://example.test/a"},{"name":"build","workflow":"Mac","bucket":"fail","link":"https://example.test/b"}]`)
+	if err := runCIPull(nil); err != nil {
+		t.Fatal(err)
+	}
+	paths, err := filepath.Glob(filepath.Join(ciDir(base), "ci-*.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 2 {
+		t.Fatalf("2 failing workflows produced %d file(s)", len(paths))
+	}
+}
+
+func TestCIRerunPreservesLegacyNotesButResetsFixed(t *testing.T) {
+	base, _ := harness(t)
+	captureStdout(t)
+	checks := `[{"name":"build","workflow":"CI","bucket":"fail","state":"FAILURE","link":"https://github.com/o/r/actions/runs/7788/job/1","completedAt":"2026-08-31T10:00:00Z"}]`
+	setChecks(t, checks)
+	if err := runCIPull(nil); err != nil {
+		t.Fatal(err)
+	}
+	paths, err := filepath.Glob(filepath.Join(ciDir(base), "ci-*.md"))
+	if err != nil || len(paths) != 1 {
+		t.Fatalf("files=%v err=%v", paths, err)
+	}
+	legacy := filepath.Join(ciDir(base), "ci-build.md")
+	if err := os.Rename(paths[0], legacy); err != nil {
+		t.Fatal(err)
+	}
+	body := strings.Replace(read(t, legacy), "status: pending", "status: fixed", 1) + "\nTried fixing the import.\n"
+	if err := os.WriteFile(legacy, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runCIPull(nil); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(read(t, legacy), "status: fixed") {
+		t.Fatal("same run lost its fixed marking")
+	}
+	setChecks(t, strings.Replace(checks, "10:00:00Z", "11:00:00Z", 1))
+	if err := runCIPull(nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ParseCIFailure(read(t, legacy))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Fixed() || got.Notes != "Tried fixing the import." {
+		t.Fatalf("rerun status/notes: %+v", got)
+	}
+	paths, err = filepath.Glob(filepath.Join(ciDir(base), "ci-*.md"))
+	if err != nil || len(paths) != 1 {
+		t.Fatalf("duplicated legacy file: %v, %v", paths, err)
 	}
 }
