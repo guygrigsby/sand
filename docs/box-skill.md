@@ -74,6 +74,9 @@ is only diagnosable if both ends can be named, and locally the other end is `san
 The program owns this, not the Makefile: the binary carries the text, and a machine that wants
 the skill may have no checkout and no `make`.
 
+`sand skill install --dry-run` previews the local path and linking operation without writing
+the skill or creating harness links. The flag applies to both local and remote installation.
+
 ## The rule
 
 **Every change to this repo updates `skill.md` in the same commit.** The skill is the only thing

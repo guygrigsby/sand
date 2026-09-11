@@ -259,3 +259,18 @@ func TestInstallSkillKeepsSomeoneElsesFile(t *testing.T) {
 		t.Fatalf("clobbered a real file: %q", body)
 	}
 }
+func TestLocalSkillDryRunDoesNotWrite(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cmd := root()
+	cmd.SetArgs([]string{"skill", "install", "--dry-run"})
+	var out strings.Builder
+	cmd.SetOut(&out)
+	t.Cleanup(func() { flagDryRun = false })
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(home, canonicalSkillPath)); err == nil {
+		t.Fatal("skill install --dry-run wrote the installed skill")
+	}
+}

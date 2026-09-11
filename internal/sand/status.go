@@ -239,7 +239,7 @@ func countBoxFiles(o StatusOpts, s *boxState) {
 			continue
 		}
 		s.CIFailing++
-		if c.Fixed() || c.Notes != "" {
+		if c.Fixed() {
 			s.CINoted++
 		}
 	}

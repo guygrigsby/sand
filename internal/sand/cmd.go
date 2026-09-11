@@ -190,7 +190,7 @@ func upCmd() *cobra.Command {
 		Long: "Everything the Mac owes the loop once an agent on the box has answered the\n" +
 			"threads, in order, with each step verified before the next one runs:\n\n" +
 			"  1 sign      the commits on the PR's branch that are not signed yet\n" +
-			"  2 push      --force-with-lease, then check the remote really moved\n" +
+			"  2 push      publish any remaining fast-forward and check the remote really moved\n" +
 			"  3 verify    GitHub itself reports every commit of the PR as verified\n" +
 			"  4 replies   post the drafted replies, which quote those commits\n\n" +
 			"A step that fails stops the ones after it: a reply that quotes a hash nobody\n" +
@@ -204,7 +204,7 @@ func upCmd() *cobra.Command {
 	c.Flags().BoolVarP(&flagYes, "yes", "y", false, "skip the confirmation before rewriting history")
 	c.Flags().BoolVar(&flagOtherAuth, "allow-other-authors", false,
 		"sign commits made by someone other than this machine's git identity")
-	c.Flags().BoolVar(&flagDryRun, "dry-run", false, "say what each step would do, change nothing anywhere")
+	c.Flags().BoolVar(&flagDryRun, "dry-run", false, "preview each step; imports and fetches locally, but never signs, pushes or posts")
 	return c
 }
 
@@ -360,7 +360,9 @@ func ensurePushed(branch string) error {
 		return nil
 	}
 
-	args := []string{"push", "--force-with-lease", flagRemote, branch}
+	// Sign already performed any authorized rewrite. This fallback may only
+	// fast-forward; it must never turn a skipped signing push into a rewind.
+	args := []string{"push", flagRemote, branch}
 	if remote == "" {
 		args = []string{"push", "--set-upstream", flagRemote, branch}
 	}
@@ -542,6 +544,10 @@ func runSkillInstall(out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if flagDryRun {
+		fmt.Fprintf(out, "dry run: would write %s and link the harnesses installed here\n", filepath.Join(home, canonicalSkillPath))
+		return nil
+	}
 	got, err := InstallSkill(home)
 	if got.Path != "" {
 		state := "unchanged"
@@ -707,13 +713,21 @@ func runCIPull(args []string) error {
 	var others []Check
 	for _, c := range checks {
 		if c.Failed() {
-			failing[c.Name] = c
+			failing[checkKey(c.Workflow, c.Name)] = c
 			continue
 		}
 		others = append(others, c)
 	}
 
 	ciPath := target.CIPath(cfg.RemoteDir)
+	var lock *remoteLock
+	if !flagDryRun {
+		lock, err = lockRemote(cfg, target.Repo)
+		if err != nil {
+			return err
+		}
+		defer lock.Close()
+	}
 
 	// Read what is on the box first, so notes written there survive a re-pull.
 	existingDir, err := fetchDir(cfg.Host, ciPath)
@@ -736,12 +750,13 @@ func runCIPull(args []string) error {
 	// left alone: the transport adds and never deletes, so leaving it would have the agent
 	// reading `bucket: fail` about a check that is green, with a log from a run that has
 	// been superseded. The merge below gives it its notes and its commit back.
-	current := byName(checks)
+	current := byCheckKey(checks)
 	for _, old := range onBox {
-		if _, still := failing[old.Meta.Check]; still {
+		key := checkKey(old.Meta.Workflow, old.Meta.Check)
+		if _, still := failing[key]; still {
 			continue
 		}
-		files = append(files, greenAgain(old, current[old.Meta.Check]))
+		files = append(files, greenAgain(old, current[key]))
 	}
 	sort.SliceStable(files, func(i, j int) bool { return files[i].Meta.Check < files[j].Meta.Check })
 
@@ -753,16 +768,17 @@ func runCIPull(args []string) error {
 
 	byCheck := map[string]CIFailure{}
 	for _, f := range onBox {
-		byCheck[f.Meta.Check] = f
+		byCheck[checkKey(f.Meta.Workflow, f.Meta.Check)] = f
 	}
 	var pending, noted int
+	names := map[string]bool{}
 	for i := range files {
 		f := &files[i]
-		if old, ok := byCheck[f.Meta.Check]; ok {
+		if old, ok := byCheck[checkKey(f.Meta.Workflow, f.Meta.Check)]; ok {
 			f.Merge(old)
 		}
 		if f.Meta.Bucket == bucketFail {
-			if f.Fixed() || f.Notes != "" {
+			if f.Fixed() {
 				noted++
 			} else {
 				pending++
@@ -772,6 +788,10 @@ func runCIPull(args []string) error {
 		if err != nil {
 			return err
 		}
+		if names[f.Filename()] {
+			return fmt.Errorf("checks share file %s; refusing to overwrite a failure report", f.Filename())
+		}
+		names[f.Filename()] = true
 		if err := os.WriteFile(filepath.Join(outDir, f.Filename()), []byte(body), 0o644); err != nil {
 			return err
 		}
@@ -810,7 +830,13 @@ func runCIPull(args []string) error {
 		}
 		return nil
 	}
+	if err := lock.check(); err != nil {
+		return err
+	}
 	if err := sendDir(cfg.Host, outDir, ciPath); err != nil {
+		return err
+	}
+	if err := lock.Close(); err != nil {
 		return err
 	}
 	fmt.Printf("→ %s:%s (start at index.md)\n", cfg.Host, ciPath)
@@ -853,7 +879,8 @@ func ciFile(t Target, c Check, logLines int) CIFailure {
 	f := CIFailure{Meta: CIMeta{
 		Check: c.Name, Workflow: c.Workflow, Bucket: c.Bucket, State: c.State,
 		Link: c.Link, RunID: c.RunID,
-		PulledAt: time.Now().Format(time.RFC3339), Status: StatusPending,
+		CompletedAt: c.CompletedAt,
+		PulledAt:    time.Now().Format(time.RFC3339), Status: StatusPending,
 	}}
 	if c.RunID == "" {
 		f.LogNote = "This check is not a GitHub Actions run, so the Mac has no way to fetch its " +
@@ -877,6 +904,7 @@ func greenAgain(old CIFailure, c Check) CIFailure {
 	f := CIFailure{Meta: old.Meta} // the notes come back through Merge, like every other file's
 	f.Meta.Bucket, f.Meta.State = c.Bucket, c.State
 	f.Meta.PulledAt = time.Now().Format(time.RFC3339)
+	f.Meta.CompletedAt = c.CompletedAt
 	if c.Name == "" {
 		f.LogNote = "GitHub no longer reports this check on the PR at all."
 		return f
@@ -888,10 +916,10 @@ func greenAgain(old CIFailure, c Check) CIFailure {
 	return f
 }
 
-func byName(checks []Check) map[string]Check {
+func byCheckKey(checks []Check) map[string]Check {
 	out := make(map[string]Check, len(checks))
 	for _, c := range checks {
-		out[c.Name] = c
+		out[checkKey(c.Workflow, c.Name)] = c
 	}
 	return out
 }
@@ -915,6 +943,7 @@ func loadCIFiles(dir string) ([]CIFailure, error) {
 			warn(fmt.Sprintf("%s: %v (skipped)", filepath.Base(p), err))
 			continue
 		}
+		f.filename = filepath.Base(p)
 		out = append(out, f)
 	}
 	return out, nil
@@ -939,7 +968,7 @@ func reportCIProgress(cfg Config, ciPath string) error {
 			continue
 		}
 		switch {
-		case f.Fixed() || f.Notes != "":
+		case f.Fixed():
 			fixed++
 			fmt.Printf("  worked %-28s %s\n", f.Meta.Check, f.Meta.Commit)
 		default:
@@ -1147,6 +1176,14 @@ func runPull(args []string) error {
 	remotePath := target.RemotePath(cfg.RemoteDir)
 
 	// Read what is already on the box so drafts survive a re-pull.
+	var lock *remoteLock
+	if !flagDryRun {
+		lock, err = lockRemote(cfg, target.Repo)
+		if err != nil {
+			return err
+		}
+		defer lock.Close()
+	}
 	existingDir, err := fetchDir(cfg.Host, remotePath)
 	if err != nil {
 		return err
@@ -1214,7 +1251,13 @@ func runPull(args []string) error {
 		}
 		return nil
 	}
+	if err := lock.check(); err != nil {
+		return err
+	}
 	if err := sendDir(cfg.Host, outDir, remotePath); err != nil {
+		return err
+	}
+	if err := lock.Close(); err != nil {
 		return err
 	}
 	fmt.Printf("→ %s:%s (start at index.md)\n", cfg.Host, remotePath)
@@ -1285,12 +1328,27 @@ func runPush(args []string) error {
 		return err
 	}
 	remotePath := target.RemotePath(cfg.RemoteDir)
+	var lock *remoteLock
+	if !flagDryRun {
+		lock, err = lockRemote(cfg, target.Repo)
+		if err != nil {
+			return err
+		}
+		defer lock.Close()
+	}
 
 	dir, err := fetchDir(cfg.Host, remotePath)
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(dir)
+	// Only sent markings travel back. The fetched snapshot also contains index.md,
+	// other replies and the CI directory, none of which this command owns.
+	markedDir, err := os.MkdirTemp("", "sand-sent-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(markedDir)
 
 	files, failed, err := loadThreadFiles(dir)
 	if err != nil {
@@ -1341,7 +1399,7 @@ func runPush(args []string) error {
 
 	var sent, skipped, recovered int
 	for _, tf := range files {
-		f, raw, t := tf.path, tf.raw, tf.thread
+		f, raw, t := filepath.Join(markedDir, filepath.Base(tf.path)), tf.raw, tf.thread
 		if t.Reply == "" || t.Sent() {
 			skipped++
 			continue
@@ -1394,6 +1452,9 @@ func runPush(args []string) error {
 		if sent > 0 {
 			time.Sleep(betweenPosts)
 		}
+		if err := lock.check(); err != nil {
+			return err
+		}
 		url, err := Reply(target, t.Meta.CommentID, body)
 		if err != nil {
 			// One bad comment id or one throttle must not cost the rest of the batch.
@@ -1423,7 +1484,10 @@ func runPush(args []string) error {
 	if sent+recovered > 0 {
 		// Carry the markings back, so the usual case costs no GitHub calls next time. This
 		// failing is no longer a double-post: it is a slower next run.
-		if err := sendDir(cfg.Host, dir, remotePath); err != nil {
+		if err := lock.check(); err != nil {
+			return err
+		}
+		if err := sendDir(cfg.Host, markedDir, remotePath); err != nil {
 			warn(fmt.Sprintf("could not mark replies sent on %s (%v); nothing was posted twice, "+
 				"the next run reads the thread from GitHub and re-marks them", cfg.Host, err))
 		}
@@ -1431,7 +1495,7 @@ func runPush(args []string) error {
 	if failed > 0 {
 		return fmt.Errorf("%d reply(ies) failed", failed)
 	}
-	return nil
+	return lock.Close()
 }
 
 // alreadyPosted asks GitHub what this account has already replied on each thread of the PR.

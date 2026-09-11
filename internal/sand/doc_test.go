@@ -122,9 +122,9 @@ func TestMergeKeepsBoxSideEdits(t *testing.T) {
 	old.Meta.RepliedAt = "2026-08-31T12:00:00Z"
 	old.Meta.ReplyURL = "https://github.com/o/r/pull/42#discussion_r2043999"
 
-	// A fresh pull: same thread, a new comment, and no knowledge of the draft.
+	// A fresh pull with no follow-up keeps the sent reply and its marking.
 	fresh := sample()
-	fresh.Comments = append(fresh.Comments, Comment{Author: "reviewer", CreatedAt: "2026-09-01T09:00:00Z", Body: "ping"})
+	fresh.Comments = append(fresh.Comments, Comment{Author: "guy", CreatedAt: old.Meta.RepliedAt, Body: "done", URL: old.Meta.ReplyURL})
 	fresh.Merge(old)
 
 	if fresh.Reply != "done" || fresh.Meta.Commit != "abc1234" {

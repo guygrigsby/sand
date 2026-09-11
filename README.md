@@ -79,9 +79,7 @@ This writes `issue.md` under `<remote_dir>/<owner>/<repo>/issue-1532/` and creat
 on the box for whichever agent you ask about the issue there. The box agent writes
 `pr-description.md` beside the issue before handoff.
 
-The `<you>` is `branch_prefix`, your `$USER` unless you set it. It is the name `sand up` reads
-the issue number back out of when there is no PR yet, so a branch made by hand wants the same
-shape: `sand config set branch_prefix <yours>` if `$USER` is not what you branch under.
+The `<you>` is `branch_prefix`, which is required and asked for by `sand init` and `sand config init`. It is the name `sand up` reads the issue number back out of when there is no PR yet, so a branch made by hand wants the same shape: `sand config set branch_prefix <yours>`.
 
 Everything else defaults the PR to the one for the current branch. A number or a PR URL overrides.
 
@@ -92,7 +90,7 @@ Everything else defaults the PR to the one for the current branch. A number or a
     sand ci pull                  # the PR's failing checks and their logs, same trip
     sand up                       # sign, push, open a missing PR, verify, post replies
     sand push                     # alias for sand up
-    sand up --dry-run             # all four steps, changes nothing anywhere
+    sand up --dry-run             # preview all four steps; still imports and fetches locally
 
 Finer grained, if you want the steps apart:
 
@@ -128,10 +126,10 @@ lineage an earlier signing round replaced is refused outright, before anything i
 commits are unsigned copies of commits already on the remote, and pushing a second copy is how
 the two histories drift apart unnoticed.
 
-One agent per repo checkout on the box, enforced with `flock` there: a second `pull` for
-another PR of the same repo, or a `ci pull` for the same one, refuses to start an agent while
-the first is working, rather than let two edit one tree. `--no-agent` writes the files and
-leaves it alone.
+One agent per repo checkout on the box, enforced with `flock` there. Comment pull, CI pull
+and comment push hold the same lock while syncing files, so they refuse while an agent is
+working. This includes `--no-agent`, which skips agent startup but still protects drafts.
+Push uploads only the reply files it marked sent, preserving unrelated CI files.
 
 `sand pr create` starts the configured agent in the box checkout and has it inspect the branch diff and commit history. If the branch name identifies an issue, the agent reads that context too. The agent loads the voice skill's `pr-description` register, including `~/.claude/voice/rules.md`, `~/.claude/voice/voice.md` and matching corpus samples, then writes `pr-title.txt` and `pr-description.md` under the repo's sand directory. Sand reads those files back byte for byte, signs and pushes the branch, opens the PR with `gh` on the Mac and verifies the commits. Markdown stays Markdown, including code fences. Missing or invalid draft files stop before the PR opens.
 
@@ -140,13 +138,13 @@ With no PR for the current `<you>/<issue>-...` branch, `up` still reads the box-
 `sand status` is the one to run when you do not know which of those you want. It reads this Mac,
 the box and GitHub at once and prints one `next:` line: the branch and unsigned count here, the
 box's branch, dirty count and whether an agent holds the lock there, how many replies are drafted
-and how many checks have notes, and what GitHub says is unresolved, failing or unverified. It
+and how many checks are marked fixed, and what GitHub says is unresolved, failing or unverified. It
 changes nothing anywhere. It does fetch, from the remote and from the box, because the thing it
 is really looking for is commits on the box that are unsigned copies of commits already pushed,
 and that is a question about trees rather than hashes. A branch with no PR is fine.
 
-`comments pull` is safe to re-run. Replies already drafted on the box survive, and a thread
-already posted stays `status: sent` and is not posted twice.
+`comments pull` preserves drafted replies. A posted thread stays `status: sent` until a new
+reviewer follow-up reopens it with an empty reply slot. Earlier replies stay in the conversation.
 
 The files land in `<remote_dir>/<owner>/<repo>/pr-<n>/` on the box: `index.md` plus one
 `c-<comment-id>.md` per thread. An agent on the box reads them through the skill, which the
@@ -163,6 +161,10 @@ box through `sand up` like everything else and CI running again is the verdict. 
 what it did under `## notes` in the check's file, which is for the next round to read, not for
 GitHub.
 
+CI notes survive re-pulls, but notes alone do not mark a check fixed. A new failing run resets
+the previous run's fixed status so an unsuccessful fix gets another attempt. Check files
+distinguish workflows and names, including names that would sanitize to the same filename.
+
 ## Config
 
 `~/.config/sand/config.yaml`. Flags beat `SAND_<KEY>` in the environment, which beats the file,
@@ -174,11 +176,9 @@ which beats the defaults.
 | `remote_dir` | `~/.sand` | base dir on the box for the thread files |
 | `harness` | `claude` | agent CLI `pull` starts on the box: `claude` or `pi` |
 | `model` | the harness's own | model to pass it, in that harness's spelling |
-| `branch_prefix` | `$USER` | what `sand new` puts before `<issue>-<title>` |
+| `branch_prefix` | none, required | what `sand new` puts before `<issue>-<title>` |
 
-`host` has no default because it names one specific machine on your own network. If ssh refuses your
-Mac's local username, put the login user in the Mac's `~/.ssh/config` or in the host itself:
-`sand config set host ubuntu@<box>`.
+`host` and `branch_prefix` have no defaults: one names one specific machine on your own network, and the other names your branches. If ssh refuses your Mac's local username, put the login user in the Mac's `~/.ssh/config` or in the host itself: `sand config set host ubuntu@<box>`.
 
     sand config                   # print the file
     sand config init              # create it, or bring an existing one up to date

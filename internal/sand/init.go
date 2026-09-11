@@ -149,18 +149,15 @@ func askConfig(o InitOpts, answers *bufio.Reader) (Config, string, error) {
 		*f.ptr = ask(answers, o.Out, question, *f.ptr)
 	}
 
-	// The one key with no default and nothing to fall back on. Asked again rather than
-	// accepted empty, because every command that talks to the box fails without it, and this
-	// is the command whose whole job is to not leave that discovery to them.
-	if cfg.Host == "" && answers != nil {
-		fmt.Fprintln(o.Out, "\nhost names the one machine this Mac drives, and has no default.")
-		cfg.Host = ask(answers, o.Out, "sandbox ssh alias or user@host", "")
-	}
+	askRequired(&cfg, answers, o.Out)
 	if err := writeConfig(cfg); err != nil {
 		return cfg, path, err
 	}
 	if cfg.Host == "" {
 		warn("no host: `sand config set host <alias>` before anything that talks to the box")
+	}
+	if branchPrefix(cfg.BranchPrefix) == "" {
+		warn("no branch_prefix: `sand config set branch_prefix <yours>` before `sand new` or `sand up`")
 	}
 	return cfg, path, nil
 }

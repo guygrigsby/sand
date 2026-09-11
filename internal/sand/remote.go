@@ -5,14 +5,96 @@ package sand
 // and both accept `-C dir` and `-` for the archive itself.
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path"
 	"regexp"
 	"strings"
 )
+
+// remoteLock keeps the agent's flock held over a dedicated SSH connection while
+// a pull or push reads and updates its files. Closing stdin releases it; losing
+// the connection also releases it, so an interrupted command leaves no stale lock.
+type remoteLock struct {
+	input  io.WriteCloser
+	done   chan struct{}
+	err    error // read only after done closes
+	closed bool
+}
+
+func lockRemote(cfg Config, repo string) (*remoteLock, error) {
+	lock := agentLock(cfg.RemoteDir, repo)
+	remote := fmt.Sprintf("command -v flock >/dev/null 2>&1 || exit %d; mkdir -p %s && exec flock -n -E %d %s sh -c %s",
+		exitNoFlock, remoteQuote(path.Dir(lock)), exitLocked, remoteQuote(lock),
+		shellQuote("printf 'locked\\n'; cat >/dev/null"))
+	cmd := exec.Command(sshBin(), cfg.Host, remote)
+	input, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	output, err := cmd.StdoutPipe()
+	if err != nil {
+		input.Close()
+		return nil, err
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		input.Close()
+		return nil, err
+	}
+	line, readErr := bufio.NewReader(output).ReadString('\n')
+	if readErr != nil || line != "locked\n" {
+		input.Close()
+		err := cmd.Wait()
+		switch exitCode(err) {
+		case exitLocked:
+			return nil, fmt.Errorf("an agent or another sand command is already working on %s:%s; let it finish before syncing files", cfg.Host, repo)
+		case exitNoFlock:
+			return nil, fmt.Errorf("cannot lock %s:%s: install util-linux on the box for flock", cfg.Host, repo)
+		}
+		return nil, fmt.Errorf("acquiring lock on %s:%s: %v (%s)", cfg.Host, repo, err, strings.TrimSpace(stderr.String()))
+	}
+	l := &remoteLock{input: input, done: make(chan struct{})}
+	go func() {
+		l.err = cmd.Wait()
+		close(l.done)
+	}()
+	return l, nil
+}
+
+func (l *remoteLock) check() error {
+	if l == nil {
+		return nil // dry runs acquire no lock and write nothing
+	}
+	select {
+	case <-l.done:
+		return fmt.Errorf("lost the sandbox synchronization lock: %v", l.err)
+	default:
+		return nil
+	}
+}
+
+func (l *remoteLock) Close() error {
+	if l == nil || l.closed {
+		return nil
+	}
+	l.closed = true
+	err := l.check()
+	l.input.Close()
+	<-l.done
+	if err != nil {
+		return err
+	}
+	if l.err != nil {
+		return fmt.Errorf("releasing sandbox synchronization lock: %w", l.err)
+	}
+	return nil
+}
 
 // sshBin is the ssh command to use. SAND_SSH overrides it, which is how the transport
 // gets exercised in tests without a second machine.

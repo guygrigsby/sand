@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -42,6 +43,7 @@ type Comment struct {
 	Author    string
 	CreatedAt string
 	Body      string
+	URL       string
 }
 
 // Thread is one review thread: its front matter, the conversation, the diff it hangs
@@ -199,6 +201,11 @@ func ReplaceFrontMatter(orig string, m Meta) (string, error) {
 // commit the agent recorded, and whether push already sent it. Without this a second
 // pull while an agent is mid-work would throw its drafts away.
 func (t *Thread) Merge(old Thread) {
+	if old.Sent() && t.followedUp(old) {
+		t.Meta.Status = StatusPending
+		t.Reply, t.Meta.Commit, t.Meta.RepliedAt, t.Meta.ReplyURL = "", "", "", ""
+		return // the sent reply remains in the conversation; this round needs a new draft
+	}
 	t.Reply = old.Reply
 	t.Meta.Commit = old.Meta.Commit
 	t.Meta.RepliedAt = old.Meta.RepliedAt
@@ -206,6 +213,50 @@ func (t *Thread) Merge(old Thread) {
 	if old.Meta.Status == StatusSent {
 		t.Meta.Status = StatusSent
 	}
+}
+
+// Find the actual posted reply before deciding whether anything arrived after it.
+// Recovery markings and legacy files may lack a reply URL, so the posted body is
+// the fallback. This also avoids reopening a thread for our own POST after pull.
+func (t Thread) followedUp(old Thread) bool {
+	anchor := -1
+	for i, c := range t.Comments {
+		if old.Meta.ReplyURL != "" && c.URL == old.Meta.ReplyURL {
+			anchor = i
+			break
+		}
+	}
+	if anchor < 0 && strings.TrimSpace(old.Reply) != "" {
+		draft := strings.TrimSpace(old.Reply)
+		for i, c := range t.Comments {
+			body := strings.TrimSpace(c.Body)
+			if body == draft || strings.HasPrefix(body, draft+"\n\nFixed in [`") {
+				anchor = i
+				break
+			}
+		}
+	}
+	if anchor >= 0 {
+		for _, c := range t.Comments[anchor+1:] {
+			if c.Author == "" || c.Author != t.Comments[anchor].Author {
+				return true
+			}
+		}
+		return false
+	}
+	// If the old reply was deleted, its recorded posting time still distinguishes
+	// later discussion from the comments it answered. No timestamp means unknown.
+	posted, err := time.Parse(time.RFC3339, old.Meta.RepliedAt)
+	if err != nil {
+		return false
+	}
+	for _, c := range t.Comments {
+		created, err := time.Parse(time.RFC3339, c.CreatedAt)
+		if err == nil && created.After(posted) {
+			return true
+		}
+	}
+	return false
 }
 
 // Sent reports whether push has already posted this reply.

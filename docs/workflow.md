@@ -51,14 +51,7 @@ brainstorming and later holds `pr-description.md`.
 The Mac branch exists so `sand up` has an unambiguous current issue before signing imports the
 box commits. Creating a ref is bookkeeping, not source editing.
 
-- **The prefix is config, and its default is `$USER`.** It was `guy/`, written into both
-  `issueBranch` and `issueNumberFromBranch`, which is the one thing in here that could not
-  work for a second person: their `sand new` named a branch after somebody else, and then
-  their `sand up` could not find the issue number in a branch they had named themselves.
-  `branch_prefix` defaults to `$USER` rather than being asked for like `host`, because unlike a
-  ssh alias the machine already knows the answer, and an empty prefix is still a working
-  branch name (`<issue>-<title>`) rather than a stop. One implementation reads and writes it
-  (`branchPrefix`), so the name `new` creates is by construction the name `up` parses.
+- **The prefix is config, and it is required.** It was `guy/`, written into both `issueBranch` and `issueNumberFromBranch`, which is the one thing in here that could not work for a second person: their `sand new` named a branch after somebody else, and then their `sand up` could not find the issue number in a branch they had named themselves. Defaulting it to `$USER` made the same break quieter: one Mac branched as `guygrigsby/...` while the branches were actually `guy/...`, and `up` could not read its own handoff. So `init` asks, `new` and `up` refuse an unset prefix, and one implementation reads and writes it (`branchPrefix`), so the name `new` creates is by construction the name `up` parses.
 
 ## Creating a PR: `sand pr create`
 
@@ -75,10 +68,10 @@ step verified before the next runs and printed so a watching human can check it:
    back on the box once it is on the remote. A rewrite that reached GitHub and not the box gets
    its own warning line: it is the one outcome here that breaks the *next* round rather than this
    one, so it must not be left in the signing output for someone to notice.
-2. `push` `--force-with-lease`, then re-read the remote ref to prove it moved. Signing pushes
+2. `push` any remaining fast-forward, then re-read the remote ref to prove it moved. Signing pushes
    what it rewrote and a fully-signed branch the remote is behind, so on most runs this step
-   reads "already at" and is the proof rather than the push. It still has work when something
-   declined the push at step 1, or when the remote holds commits the branch does not.
+   reads "already at" and is the proof rather than the push. Only signing may force a rewrite,
+   leased against the remote hash it checked. Remote-only commits stop the run.
 3. `verify` that GitHub reports every commit of the PR as verified. A failure here is almost
    always the signing key missing from the GitHub account, so the error says that.
 4. `replies`: `comments push`.
@@ -89,7 +82,8 @@ then runs the same GitHub signature verification. A missing description stops th
 is an alias for `up` so both entry points have the same ordering and checks.
 
 Flags: `--pr`, `--remote`, `--base`, `-y/--yes`, `--allow-other-authors`, `--dry-run`. The dry run covers all four steps
-at once and changes nothing anywhere. Declining the rewrite at step 1 stops the run rather than
+at once: it imports the box branch and fetches locally, but signs, pushes and posts nothing.
+Declining the rewrite at step 1 stops the run rather than
 posting replies about commits that were never signed.
 
 The order is the whole point: a reply quotes a commit hash, signing changes commit hashes, so

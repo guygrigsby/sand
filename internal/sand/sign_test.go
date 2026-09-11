@@ -1178,3 +1178,115 @@ func isHex(s string) bool {
 	}
 	return true
 }
+
+func TestSignedDryRunDoesNotPublish(t *testing.T) {
+	dir, remote := signRepo(t)
+	var out strings.Builder
+	if _, err := Sign(signOpts(&out, "n\n")); err != nil {
+		t.Fatal(err)
+	}
+	o := signOpts(&out, "")
+	o.DryRun, o.Push = true, true
+	res, err := Sign(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := mustRun(t, dir, "git", "--git-dir", remote, "for-each-ref", "refs/heads/feature")
+	if refs != "" || res.Pushed {
+		t.Fatalf("dry-run published feature to the bare remote; Pushed=%v\n%s", res.Pushed, out.String())
+	}
+}
+
+func TestUpPreservesRemoteAhead(t *testing.T) {
+	dir, remote := signRepo(t)
+	mustRun(t, dir, "git", "switch", "--quiet", "-c", "topic")
+	var signOut strings.Builder
+	o := signOpts(&signOut, "")
+	o.Push = true
+	if _, err := Sign(o); err != nil {
+		t.Fatal(err)
+	}
+	boxAtURL(t, dir, "topic")
+	mustRun(t, dir, "git", "config", "commit.gpgsign", "true")
+	commit(t, dir, "newer.txt", "newer\n", "remote: work after the box last synced")
+	mustRun(t, dir, "git", "push", "--quiet", "origin", "topic")
+	remoteBefore := mustRun(t, dir, "git", "--git-dir", remote, "rev-parse", "topic")
+	harness(t)
+	if err := runPull(nil); err != nil {
+		t.Fatal(err)
+	}
+	cmd := upCmd()
+	flagPR, flagYes = "42", true
+	t.Cleanup(func() { flagYes = false })
+	output := captureStdout(t)
+	err := runUp(cmd, nil)
+	after := mustRun(t, dir, "git", "--git-dir", remote, "rev-parse", "topic")
+	if err == nil {
+		t.Fatal("up did not report the remote-only commits")
+	}
+	if after != remoteBefore {
+		t.Fatalf("up rewound the remote from %s to %s; err=%v\n%s", short(remoteBefore), short(after), err, output())
+	}
+}
+
+func TestSignUnsignedCommitAlreadyOnRemote(t *testing.T) {
+	dir, _ := signRepo(t)
+	mustRun(t, dir, "git", "push", "--quiet", "origin", "feature")
+	var out strings.Builder
+	o := signOpts(&out, "")
+	o.Push = true
+	if _, err := Sign(o); err != nil {
+		t.Fatalf("cannot sign the existing unsigned PR branch: %v", err)
+	}
+	local := mustRun(t, dir, "git", "rev-parse", "feature")
+	remote := mustRun(t, dir, "git", "rev-parse", "origin/feature")
+	if local != remote {
+		t.Fatalf("signed head %s was not published: remote at %s", local, remote)
+	}
+	if raw := mustRun(t, dir, "git", "cat-file", "commit", remote); !hasSignature(raw) {
+		t.Fatal("published branch is still unsigned")
+	}
+}
+
+func TestPublishLeaseSurvivesBackgroundFetch(t *testing.T) {
+	dir, remote := signRepo(t)
+	imported := mustRun(t, dir, "git", "rev-parse", "feature")
+	mustRun(t, dir, "git", "push", "--quiet", "origin", "feature")
+	var out strings.Builder
+	if _, err := Sign(signOpts(&out, "n\n")); err != nil {
+		t.Fatal(err)
+	}
+	head := mustRun(t, dir, "git", "rev-parse", "feature")
+	// Another machine pushes, then a background fetch updates our tracking ref.
+	newer := mustRun(t, dir, "git", "commit-tree", imported+"^{tree}", "-p", imported, "-m", "new remote work")
+	mustRun(t, dir, "git", "push", "--quiet", "origin", newer+":refs/heads/feature")
+	mustRun(t, dir, "git", "fetch", "--quiet", "origin")
+	o := signOpts(&out, "")
+	o.Push = true
+	var res SignResult
+	err := publish(gitCmd{out: &out}, o, nil, &res, "feature", imported, head, imported)
+	if err == nil || res.Pushed {
+		t.Fatalf("accepted a stale lease: err=%v result=%+v", err, res)
+	}
+	if got := mustRun(t, dir, "git", "--git-dir", remote, "rev-parse", "feature"); got != newer {
+		t.Fatal("overwrote the remote's newer commit")
+	}
+}
+
+func TestEnsurePushedCannotRewindRemote(t *testing.T) {
+	dir, remote := signRepo(t)
+	before := mustRun(t, dir, "git", "rev-parse", "feature")
+	commit(t, dir, "remote.txt", "keep this\n", "new remote work")
+	newer := mustRun(t, dir, "git", "rev-parse", "feature")
+	mustRun(t, dir, "git", "push", "--quiet", "origin", "feature")
+	mustRun(t, dir, "git", "reset", "--hard", before)
+	flagRemote, flagDryRun = "origin", false
+	t.Cleanup(func() { flagRemote = ""; flagDryRun = false })
+	captureStdout(t)
+	if err := ensurePushed("feature"); err == nil {
+		t.Fatal("fallback accepted a rewind")
+	}
+	if got := mustRun(t, dir, "git", "--git-dir", remote, "rev-parse", "feature"); got != newer {
+		t.Fatal("fallback overwrote remote work")
+	}
+}

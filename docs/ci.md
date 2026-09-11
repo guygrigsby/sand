@@ -24,15 +24,19 @@ and `--all`.
   both) posts a legacy commit status; the Mac has no client for it and guessing at one would be
   inventing a second integration. `actionsRun()` reads the run id out of `/actions/runs/<id>` and
   everything else is link-only, with the file saying why.
-- **Files are keyed by check name, not by run id.** The same check failing again next round has
-  to land on the same file or the notes from this round have nothing to merge onto.
+- **Files are keyed by workflow and check name.** New filenames include a digest of both, so
+  two workflows with a `build` check, or names that sanitize alike, cannot overwrite each other.
+  Existing files keep their filenames and notes; the index links to the actual file. Run IDs
+  do not enter the filename, because notes must survive from one attempt to the next.
 - **A check that goes green keeps its file, refreshed.** `sendDir` adds and never deletes, so the
   alternative is a file on the box still saying `bucket: fail` with a superseded log, which is
   what an agent would read next. Its notes and `commit:` survive, its bucket becomes what GitHub
   now says, and the index lists it under "not failing any more".
 - **`## notes`, `commit:` and `status:` belong to the box**, merged forward exactly as the reply
   slot is. `status: fixed` is a claim, not a verdict: nothing here can verify it, the next CI run
-  does.
+  does. A new failed run clears the fixed marking and fixing commit, preserving the notes as
+  context. Run ID, check link and `completed_at` identify the attempt, including reruns of the
+  same Actions run. Notes alone never suppress a pending check's agent run.
 - **The notes slot is parsed from the end of the file, unlike a reply.** A comment body is
   blockquoted and a diff line is prefixed, so neither can forge `## reply`. A log is verbatim: a
   build that prints `## notes` at the start of a line would take the slot and hand the rest of
