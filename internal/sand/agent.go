@@ -252,16 +252,35 @@ func firstLine(s string, max int) string {
 // agentPrompt is what the agent is told. Short on purpose: the skill on the box carries the
 // rules, and repeating them here is how the two drift apart. It names the directory and the
 // PR because those are the parts the skill cannot know.
-func agentPrompt(t Target, prDir string, threads int) string {
-	return fmt.Sprintf(
-		"Use the sand skill. %d unresolved review thread(s) for %s#%d (%q) are pulled to %s "+
-			"on this box; you are in the repo checkout they are about. Work through every thread "+
-			"whose status is pending: fix the code here, prove bugs with a failing test first, run "+
-			"make check, commit, then write your reply under `## reply` and the commit's short hash "+
-			"in `commit:` in that thread's file. Do not run sand or gh, and do not push: the Mac "+
-			"signs and posts. Finish by listing which threads you answered and which you left, "+
-			"with the reason.",
-		threads, t.Slug(), t.Number, t.Title, prDir)
+//
+// It names the review summaries separately because they are work with no thread file under
+// them: a reviewer whose findings all fell outside the diff leaves threads at zero, and an
+// agent told only about threads would open index.md, see none and stop with the review
+// unread. The reply route differs too, so the prompt has to say which half is which.
+func agentPrompt(t Target, prDir string, threads, reviews int) string {
+	var work []string
+	if threads > 0 {
+		work = append(work, fmt.Sprintf("%d unresolved review thread(s)", threads))
+	}
+	if reviews > 0 {
+		work = append(work, countOf(reviews, "new review summary", "new review summaries")+" in index.md")
+	}
+	prompt := fmt.Sprintf(
+		"Use the sand skill. %s for %s#%d (%q) are pulled to %s on this box; you are in the "+
+			"repo checkout they are about. Fix the code here, prove bugs with a failing test "+
+			"first, run make check and commit.",
+		strings.Join(work, " and "), t.Slug(), t.Number, t.Title, prDir)
+	if threads > 0 {
+		prompt += " Work through every thread whose status is pending, and write your reply " +
+			"under `## reply` and the fixing commit's short hash in `commit:` in that thread's file."
+	}
+	if reviews > 0 {
+		prompt += " The review summaries are read-only: GitHub has no threaded reply for a review " +
+			"body, so there is no file to write a reply into and nothing of yours goes back for " +
+			"them. Say what you did about each one in your final report instead."
+	}
+	return prompt + " Do not run sand or gh, and do not push: the Mac signs and posts. Finish by " +
+		"listing what you answered and what you left, with the reason."
 }
 
 func prPrompt(t Target, draftDir, remote, base string) string {

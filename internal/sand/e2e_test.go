@@ -526,6 +526,73 @@ func TestPullSkipsTheAgentWhenNothingIsPending(t *testing.T) {
 	}
 }
 
+// noThreadFixture is the shape that started this: a reviewer (CodeRabbit, on
+// tailscale/aperture#2142) whose findings all fell outside the diff, so GitHub carried them as
+// a review body and opened no thread. Everything downstream of the fetch counted threads, and
+// with none the pull reported "0 thread(s)" and started nothing while index.md held the review.
+// Cut from fixture rather than copied, so the PR and review half of the two cannot drift.
+var noThreadFixture = fixture[:strings.Index(fixture, `"reviewThreads":`)] +
+	`"reviewThreads":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}}` + "\n"
+
+// A review body is the only feedback on this PR: it is still work, it is still reported, and
+// it still starts an agent, because there is no thread anywhere to carry it.
+func TestPullReportsAndWorksAReviewWithNoThreads(t *testing.T) {
+	remoteBase, _ := harness(t)
+	if err := os.WriteFile(os.Getenv("GH_FIXTURE"), []byte(noThreadFixture), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	home := os.Getenv("HOME")
+	if err := os.MkdirAll(filepath.Join(home, "projects", "r"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	agentLog := filepath.Join(home, "agent.log")
+	agent := filepath.Join(home, "fake-agent")
+	if err := os.WriteFile(agent, []byte(fakeAgent), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AGENT_LOG", agentLog)
+	t.Setenv("SAND_PR_DIR", filepath.Join(remoteBase, "o", "r", "pr-42"))
+
+	flagNoAgent, flagAgent = false, agent
+	out := captureStdout(t)
+	if err := runPull(nil); err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+
+	printed := out()
+	for _, want := range []string{"0 thread(s)", "1 review summary in index.md (1 new)"} {
+		if !strings.Contains(printed, want) {
+			t.Errorf("output missing %q:\n%s", want, printed)
+		}
+	}
+	_, prompt, _ := strings.Cut(strings.TrimSpace(read(t, agentLog)), "\n")
+	for _, want := range []string{"1 new review summary in index.md", "read-only", "no threaded reply"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, "unresolved review thread") {
+		t.Errorf("told the agent about threads that do not exist:\n%s", prompt)
+	}
+
+	// The summary has no reply to mark sent, so the copy of index.md on the box is the only
+	// record that the box has seen it. Without that, every re-pull starts an agent again.
+	if err := os.Remove(agentLog); err != nil {
+		t.Fatal(err)
+	}
+	flagAgent = filepath.Join(t.TempDir(), "never-runs") // running this would fail
+	out = captureStdout(t)
+	if err := runPull(nil); err != nil {
+		t.Fatalf("re-pull: %v", err)
+	}
+	if printed := out(); !strings.Contains(printed, "nothing pending") {
+		t.Errorf("re-ran the agent on a review the box already had:\n%s", printed)
+	}
+	if !strings.Contains(read(t, filepath.Join(remoteBase, "o", "r", "pr-42", "index.md")), "Two things.") {
+		t.Error("the review body did not survive the re-pull")
+	}
+}
+
 // captureStdout collects what the commands print, since progress reporting is the feature
 // under test here rather than a side effect.
 func captureStdout(t *testing.T) func() string {
