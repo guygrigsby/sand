@@ -1,6 +1,7 @@
 package sand
 
 import (
+	"bytes"
 	"cmp"
 	"fmt"
 	"io"
@@ -1194,6 +1195,7 @@ func runPull(args []string) error {
 		return err
 	}
 	existing := byCommentID(onBox)
+	unseen := unseenReviews(reviews, existingDir)
 
 	outDir, err := os.MkdirTemp("", "sand-pull-")
 	if err != nil {
@@ -1227,18 +1229,28 @@ func runPull(args []string) error {
 		return err
 	}
 
-	fmt.Printf("%s#%d %q: %d thread(s) — %d new, %d updated, %d already replied\n",
+	// Review summaries are counted out loud because they are the only feedback a PR can carry
+	// with no thread behind it: a reviewer whose findings were all outside the diff produces
+	// zero threads, and a line that said only "0 thread(s)" read as "nothing came back" while
+	// index.md held the review.
+	summary := fmt.Sprintf("%s#%d %q: %d thread(s) — %d new, %d updated, %d already replied",
 		target.Slug(), target.Number, target.Title, len(threads), news, updated, replied)
+	if len(reviews) > 0 {
+		summary += fmt.Sprintf("; %s in index.md (%d new)", countOf(len(reviews), "review summary", "review summaries"), unseen)
+	}
+	fmt.Println(summary)
 	for _, t := range threads {
 		fmt.Printf("  %-14s %-28s @%-16s %s\n", t.Filename(), t.Location(), t.Meta.Author, t.Meta.Status)
 	}
 
 	// An agent with nothing pending would read the files, find them all answered and
-	// spend a turn saying so.
-	start := !flagNoAgent && len(threads)-replied > 0
+	// spend a turn saying so. An unseen review summary is pending work even with no thread
+	// under it, and is the only pending work on a review that landed entirely outside the diff.
+	pending := len(threads) - replied
+	start := !flagNoAgent && (pending > 0 || unseen > 0)
 	var run AgentRun
 	if start {
-		if run, err = agentRun(cfg, target, agentPrompt(target, remotePath, len(threads)-replied)); err != nil {
+		if run, err = agentRun(cfg, target, agentPrompt(target, remotePath, pending, unseen)); err != nil {
 			return err
 		}
 	}
@@ -1623,6 +1635,35 @@ func loadThreadFiles(dir string) (files []threadFile, bad int, err error) {
 		files = append(files, threadFile{path: p, raw: string(raw), thread: t})
 	}
 	return files, bad, nil
+}
+
+// unseenReviews counts the review summaries that were not in the copy of index.md already on
+// the box. A summary has no reply to persist and so no file of its own, which leaves the last
+// index.md as the only record of what the box has already been shown; a review URL carries its
+// id and is stable, so its presence in that file is the whole test. A missing or unreadable
+// index.md (the first pull) makes every review unseen, which starts an agent that has nothing
+// new to do rather than silently skipping one that does.
+func unseenReviews(reviews []Review, existingDir string) int {
+	old, err := os.ReadFile(filepath.Join(existingDir, "index.md"))
+	if err != nil {
+		return len(reviews)
+	}
+	n := 0
+	for _, r := range reviews {
+		if !bytes.Contains(old, []byte(r.URL)) {
+			n++
+		}
+	}
+	return n
+}
+
+// countOf is "1 thing" / "2 things", for counts a person reads rather than scans. The rest of
+// the output says "thread(s)" because it is a fixed-width list; a sentence cannot.
+func countOf(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return fmt.Sprintf("%d %s", n, many)
 }
 
 // byCommentID keys thread files by the comment they reply to, for the merge on re-pull.

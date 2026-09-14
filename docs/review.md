@@ -15,8 +15,26 @@ that gets skipped, so this is the default rather than a flag. Nothing pending me
 another harness still reports. Whatever happens, the threads are read back afterwards and
 printed as answered or left: an agent that died halfway is the case that matters.
 
-The prompt names only the PR, the directory and the thread count, and points at the skill for
+The prompt names only the PR, the directory and the counts, and points at the skill for
 everything else. Two copies of the rules is two versions of the rules.
+
+## A review body with no thread under it is still work
+
+A reviewer whose findings all fall outside the diff cannot leave an inline comment: GitHub
+rejects a comment on a line the diff does not contain, so a tool like CodeRabbit puts the whole
+finding in the review body and the PR ends up with real feedback and zero threads. That case
+went missing twice over. The summary line counted only threads, so a pull that fetched a review
+printed `0 thread(s)` and read as "nothing came back"; and the agent started on
+`threads - replied > 0`, so nobody worked it. Both now count unseen review summaries too.
+
+"Unseen" is decided against the copy of `index.md` already on the box, by looking for the
+review's URL in it. A summary has no reply to persist and so, unlike a thread, no file of its
+own to hold a `status:` — the last `index.md` is the only record of what the box has been
+shown, and a review URL carries its id and never changes. A first pull, or an `index.md` that
+cannot be read, counts every review as unseen: starting an agent that finds nothing new costs a
+turn, and skipping one that had work costs the review. The prompt tells the agent these are
+read-only, because there is no `## reply` slot to write into and nothing of its answer goes
+back to GitHub; what it did with them comes out in its final report instead.
 
 The agent runs under `flock -n` on `<remote_dir>/locks/<repo>.lock`, held for the whole run.
 Two agents in one checkout is not a race to lose, it is a corrupted working tree: they edit the
