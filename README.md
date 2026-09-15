@@ -70,6 +70,24 @@ repos needs neither.
 
 ## Use
 
+From an agent conversation on the box, ask it to write an issue. It creates one draft at
+`<remote_dir>/<owner>/<repo>/issue-draft/issue.md`, with the title in YAML front matter and the
+Markdown body below it. No fix needs to exist and the current branch is not part of the issue.
+Then publish it from the Mac:
+
+    sand issue create
+
+For a one-shot version, pass the brief from the Mac and sand starts the configured box agent to
+write the same file first:
+
+    sand issue create "add a command that reports stale sandbox branches"
+
+Sand validates the title and body, opens the issue through authenticated `gh` on the Mac, and
+consumes the draft after success. A missing or malformed draft stops without publishing.
+`--dry-run` validates an existing draft without publishing or consuming it; with a brief it
+previews the agent and repository without starting anything. Creating an issue does not create a
+work branch.
+
 Start an issue from the Mac:
 
     sand new 1532                 # fetch issue, create its box data dir and switch both checkouts
@@ -84,7 +102,10 @@ The `<you>` is `branch_prefix`, which is required and asked for by `sand init` a
 Everything else defaults the PR to the one for the current branch. A number or a PR URL overrides.
 
     sand status                   # where the work is, on all three machines, and what to run next
+    sand issue create             # open the issue an existing box agent drafted
+    sand issue create "brief"     # or have sand start an agent to draft it first
     sand pr create                # agent drafts in your voice, then sign, push and open the PR
+    sand pr review                # turn the box agent's findings into a pending review
     sand comments pull            # threads to the box, agent starts, output streams back
     sand comments pull --no-agent # just write the files
     sand ci pull                  # the PR's failing checks and their logs, same trip
@@ -132,6 +153,21 @@ working. This includes `--no-agent`, which skips agent startup but still protect
 Push uploads only the reply files it marked sent, preserving unrelated CI files.
 
 `sand pr create` starts the configured agent in the box checkout and has it inspect the branch diff and commit history. If the branch name identifies an issue, the agent reads that context too. The agent loads the voice skill's `pr-description` register, including `~/.claude/voice/rules.md`, `~/.claude/voice/voice.md` and matching corpus samples, then writes `pr-title.txt` and `pr-description.md` under the repo's sand directory. Sand reads those files back byte for byte, signs and pushes the branch, opens the PR with `gh` on the Mac and verifies the commits. Markdown stays Markdown, including code fences. Missing or invalid draft files stop before the PR opens.
+
+To review a branch rather than respond to an existing review, ask an agent on the box to review
+the current branch. The sand skill has it write one Markdown file per inline finding under
+`<remote_dir>/<owner>/<repo>/reviews/<branch>/`, with repository path, diff line and side in YAML
+front matter, plus a `review.md` manifest recording the branch and exact commit. Then check out the
+same branch on the Mac and run:
+
+    sand pr review
+
+Sand resolves that branch to its open PR, pulls and validates the draft, and refuses it if the
+reviewed commit is no longer GitHub's PR head. It creates all comments together as one pending
+review without an event, so nothing is submitted or visible as a completed review until you
+inspect and submit it in GitHub's Files changed tab. A successful run consumes the draft to
+prevent duplicate comments; `--dry-run` validates and previews it without creating or consuming
+anything. A PR number or URL can be passed when the branch is not checked out on the Mac.
 
 With no PR for the current `<you>/<issue>-...` branch, `up` still reads the box-authored `issue-<n>/pr-description.md` after signing and pushing, opens the PR, then verifies it. A `pr-title.txt` beside it overrides the issue title. Missing or empty prose is a stop.
 

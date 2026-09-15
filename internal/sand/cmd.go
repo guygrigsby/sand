@@ -50,7 +50,8 @@ func root() *cobra.Command {
 		Use:   "sand",
 		Short: "Development helper for the sandbox box",
 		Long: "sand runs on the Mac and ferries work to and from the sandbox.\n\n" +
-			"`sand new` starts an issue on the box. `sand comments pull` puts PR review\n" +
+			"`sand issue create` publishes an agent-drafted issue, and `sand new` starts one on the box.\n" +
+			"`sand comments pull` puts PR review\n" +
 			"threads there for an agent, and `sand up` signs and publishes its work.",
 		Version: Version(),
 		// Execute prints the error itself, prefixed; cobra printing it too says it twice.
@@ -59,7 +60,7 @@ func root() *cobra.Command {
 	}
 	c.PersistentFlags().StringVar(&flagHost, "host", "", "sandbox ssh alias or user@host (overrides config)")
 	c.PersistentFlags().StringVar(&flagRemoteDir, "remote-dir", "", "base dir on the sandbox (overrides config)")
-	c.AddCommand(ciCmd(), cleanupCmd(), commentsCmd(), configCmd(), initCmd(), newCmd(), prCmd(), shotCmd(),
+	c.AddCommand(ciCmd(), cleanupCmd(), commentsCmd(), configCmd(), initCmd(), issueCmd(), newCmd(), prCmd(), shotCmd(),
 		signCmd(), skillCmd(), statusCmd(), upCmd())
 	return c
 }
@@ -129,9 +130,47 @@ func newCmd() *cobra.Command {
 	return c
 }
 
+func issueCmd() *cobra.Command {
+	c := &cobra.Command{Use: "issue", Short: "Work with issues"}
+	c.AddCommand(issueCreateCmd())
+	return c
+}
+
+func issueCreateCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "create [brief]",
+		Short: "Open an issue drafted by a sandbox agent",
+		Long: "Reads issue.md written by an agent on the sandbox and opens it through gh on this\n" +
+			"Mac. With a brief, starts the configured agent to write that draft first. Without one,\n" +
+			"publishes the draft from an existing agent conversation.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runIssueCreate(strings.Join(args, " "))
+		},
+	}
+	c.Flags().BoolVar(&flagDryRun, "dry-run", false, "validate or preview the draft, create nothing")
+	c.Flags().StringVar(&flagAgent, "agent", "", "agent command to run on the sandbox for this draft")
+	c.Flags().StringVar(&flagRepoDir, "repo-dir", "", "repo checkout on the sandbox (default ~/projects/<repo>)")
+	return c
+}
+
 func prCmd() *cobra.Command {
 	c := &cobra.Command{Use: "pr", Short: "Work with pull requests"}
-	c.AddCommand(prCreateCmd())
+	c.AddCommand(prCreateCmd(), prReviewCmd())
+	return c
+}
+
+func prReviewCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "review [pr-number|pr-url]",
+		Short: "Start a pending review from comments drafted on the sandbox",
+		Long: "Reads branch-scoped review comment files written by an agent on the sandbox,\n" +
+			"validates them against the PR head, and creates one pending GitHub review. The\n" +
+			"review is left unsubmitted so its comments can be checked and edited on GitHub.",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error { return runPRReview(args, cmd.OutOrStdout()) },
+	}
+	c.Flags().StringVar(&flagPR, "pr", "", "PR number or URL (default: the PR for the current branch)")
+	c.Flags().BoolVar(&flagDryRun, "dry-run", false, "validate and print the comments, create no review")
 	return c
 }
 

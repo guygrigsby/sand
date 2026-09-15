@@ -18,12 +18,36 @@ import (
 const fakeGH = `#!/bin/sh
 printf '%s\n' "$@" >> "$GH_LOG"
 case "$*" in
+  *"pulls/42/reviews"*)
+    cat > "$GH_REVIEW_INPUT"
+    if [ "${GH_REVIEW_EXIT:-0}" != 0 ]; then
+      printf 'HTTP/2.0 422 Unprocessable Entity\r\nContent-Type: application/json\r\n\r\n'
+      printf '{"message":"Validation Failed","errors":[{"field":"comments","message":"line must be part of the diff"}]}\n'
+      exit "$GH_REVIEW_EXIT"
+    fi
+    printf 'HTTP/2.0 200 OK\r\nContent-Type: application/json\r\n\r\n'
+    printf '{"html_url":"https://github.com/o/r/pull/42#pullrequestreview-99","state":"PENDING"}\n'
+    ;;
   *"--method POST"*)
     printf 'HTTP/2.0 201 Created\r\nContent-Type: application/json\r\n\r\n'
     printf '{"html_url":"https://github.com/o/r/pull/42#discussion_r999"}\n'
     ;;
   *"repo view"*)  echo '{"nameWithOwner":"o/r"}' ;;
   *"issue view"*) echo '{"title":"Fix the thing, safely!","url":"https://github.com/o/r/issues/42","body":"The fd leaks."}' ;;
+  *"issue create"*)
+    if [ "${GH_ISSUE_CREATE_EXIT:-0}" != 0 ]; then
+      echo 'issue create failed' >&2
+      exit "$GH_ISSUE_CREATE_EXIT"
+    fi
+    while [ "$1" ]; do
+      case "$1" in
+        --body-file) cp "$2" "$GH_ISSUE_BODY"; shift ;;
+        --title) printf '%s' "$2" > "$GH_ISSUE_TITLE"; shift ;;
+      esac
+      shift
+    done
+    echo 'https://github.com/o/r/issues/43'
+    ;;
   *"/commits?"*)  cat "$GH_COMMITS" ;;
   *"pr checks"*)
     cat "$GH_CHECKS"
@@ -46,7 +70,7 @@ case "$*" in
     ;;
   *"pr list"*)
     if [ "$GH_PR_MISSING" = 1 ] && [ ! -e "$GH_CREATED" ]; then echo '[]';
-    else echo '[{"number":42,"url":"https://github.com/o/r/pull/42","title":"Fix the thing","headRefName":"topic"}]'; fi
+    else echo '[{"number":42,"url":"https://github.com/o/r/pull/42","title":"Fix the thing","headRefName":"topic","headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]'; fi
     ;;
   *"pr view"*)
     # A bare "pr view" guesses the head repo from the local remotes, and in another repo the box
@@ -64,7 +88,7 @@ case "$*" in
     fi
     branch=topic
     [ "$GH_PR_MISSING" = 1 ] && branch=guy/42-fix-the-thing
-    printf '{"number":42,"url":"https://github.com/o/r/pull/42","title":"Fix the thing","headRefName":"%s"}\n' "$branch"
+    printf '{"number":42,"url":"https://github.com/o/r/pull/42","title":"Fix the thing","headRefName":"%s","headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}\n' "$branch"
     ;;
   *) echo "fake gh: unhandled: $*" >&2; exit 1 ;;
 esac
@@ -151,6 +175,9 @@ func harness(t *testing.T) (remoteBase, ghLog string) {
 	t.Setenv("GH_RUNLOG", runLogPath)
 	t.Setenv("GH_CREATED", filepath.Join(dir, "pr-created"))
 	t.Setenv("GH_PR_BODY", filepath.Join(dir, "pr-body"))
+	t.Setenv("GH_ISSUE_BODY", filepath.Join(dir, "issue-body"))
+	t.Setenv("GH_ISSUE_TITLE", filepath.Join(dir, "issue-title"))
+	t.Setenv("GH_REVIEW_INPUT", filepath.Join(dir, "review-input.json"))
 	t.Setenv("HOME", dir) // keep any real ~/.config/sand out of it
 	// Pinned, because it is required: a test that names a branch must not depend on the config
 	// of whoever is running it. A test about the prefix itself sets its own after this.
@@ -249,6 +276,205 @@ func TestNewCreatesIssueWorkspaceAndBranch(t *testing.T) {
 		if got := read(t, filepath.Join(issueDir, "issue.md")); !strings.Contains(got, want) {
 			t.Errorf("issue.md missing %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestIssueCreateHasTheAgentDraftThenOpens(t *testing.T) {
+	signRepo(t)
+	remoteBase, ghLog := harness(t)
+	draftDir := filepath.Join(remoteBase, "o", "r", "issue-draft")
+	boxRepo := filepath.Join(os.Getenv("HOME"), "projects", "r")
+	if err := os.MkdirAll(boxRepo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	agent := filepath.Join(t.TempDir(), "draft-issue")
+	agentPrompt := filepath.Join(t.TempDir(), "agent-prompt")
+	if err := os.WriteFile(agent, []byte(`#!/bin/sh
+printf '%s\n' "$@" > "$ISSUE_PROMPT"
+mkdir -p "$ISSUE_DRAFT_DIR"
+cat > "$ISSUE_DRAFT_DIR/issue.md" <<'EOF'
+---
+title: Let sand create GitHub issues
+---
+
+Sand can consume issues, but cannot create them.
+
+Preserve useful Markdown:
+
+`+"```sh"+`
+sand issue create "draft an issue"
+`+"```"+`
+EOF
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ISSUE_DRAFT_DIR", draftDir)
+	t.Setenv("ISSUE_PROMPT", agentPrompt)
+	flagAgent = agent
+	t.Cleanup(func() { flagAgent = "" })
+	out := captureStdout(t)
+
+	brief := "Create issues from an agent-drafted title and body."
+	if err := runIssueCreate(brief); err != nil {
+		t.Fatalf("issue create: %v\n%s\ngh:\n%s", err, out(), read(t, ghLog))
+	}
+
+	log := read(t, ghLog)
+	for _, want := range []string{"issue", "create", "--repo", "o/r", "--title", "Let sand create GitHub issues", "--body-file"} {
+		if !strings.Contains(log, want) {
+			t.Errorf("gh log missing %q:\n%s", want, log)
+		}
+	}
+	prompt := read(t, agentPrompt)
+	for _, want := range []string{brief, "o/r", "voice skills", "~/.claude/voice/rules.md", "~/.claude/voice/voice.md", "issue.md", "YAML front matter", "sample-source report", "No fix needs to exist", "current branch is not part of the issue"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("agent prompt missing %q:\n%s", want, prompt)
+		}
+	}
+	if got := read(t, os.Getenv("GH_ISSUE_TITLE")); got != "Let sand create GitHub issues" {
+		t.Errorf("issue title changed: %q", got)
+	}
+	wantBody := "Sand can consume issues, but cannot create them.\n\nPreserve useful Markdown:\n\n```sh\nsand issue create \"draft an issue\"\n```\n"
+	if got := read(t, os.Getenv("GH_ISSUE_BODY")); got != wantBody {
+		t.Errorf("issue body changed\nwant:\n%s\ngot:\n%s", wantBody, got)
+	}
+	if !strings.Contains(out(), "opened https://github.com/o/r/issues/43") {
+		t.Errorf("output did not report the issue:\n%s", out())
+	}
+}
+
+func TestIssueCreatePublishesADraftWrittenByAnExistingAgent(t *testing.T) {
+	signRepo(t)
+	remoteBase, ghLog := harness(t)
+	draftDir := filepath.Join(remoteBase, "o", "r", "issue-draft")
+	if err := os.MkdirAll(draftDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	draft := "---\ntitle: Issue from the existing agent\n---\n\nNo implementation exists yet.\n"
+	draftPath := filepath.Join(draftDir, "issue.md")
+	if err := os.WriteFile(draftPath, []byte(draft), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	flagAgent = filepath.Join(t.TempDir(), "must-not-run")
+	t.Cleanup(func() { flagAgent = "" })
+	out := captureStdout(t)
+
+	if err := runIssueCreate(""); err != nil {
+		t.Fatalf("issue create: %v\n%s", err, out())
+	}
+	if got := read(t, os.Getenv("GH_ISSUE_TITLE")); got != "Issue from the existing agent" {
+		t.Errorf("issue title changed: %q", got)
+	}
+	if got := read(t, os.Getenv("GH_ISSUE_BODY")); got != "No implementation exists yet.\n" {
+		t.Errorf("issue body changed: %q", got)
+	}
+	if strings.Contains(read(t, ghLog), "must-not-run") {
+		t.Errorf("started another agent:\n%s", read(t, ghLog))
+	}
+	if _, err := os.Stat(draftPath); !os.IsNotExist(err) {
+		t.Errorf("published draft was not consumed: %v", err)
+	}
+}
+
+func TestIssueCreateFailureKeepsTheAgentDraft(t *testing.T) {
+	signRepo(t)
+	remoteBase, _ := harness(t)
+	draftDir := filepath.Join(remoteBase, "o", "r", "issue-draft")
+	if err := os.MkdirAll(draftDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	draft := "---\ntitle: Keep this draft\n---\n\nGitHub will reject this attempt.\n"
+	draftPath := filepath.Join(draftDir, "issue.md")
+	if err := os.WriteFile(draftPath, []byte(draft), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GH_ISSUE_CREATE_EXIT", "1")
+
+	if err := runIssueCreate(""); err == nil {
+		t.Fatal("issue create succeeded when gh failed")
+	}
+	if got := read(t, draftPath); got != draft {
+		t.Errorf("failed create changed the agent draft\nwant:\n%s\ngot:\n%s", draft, got)
+	}
+}
+
+func TestIssueCreateRejectsAStaleDraftTheAgentDidNotWrite(t *testing.T) {
+	signRepo(t)
+	remoteBase, ghLog := harness(t)
+	draftDir := filepath.Join(remoteBase, "o", "r", "issue-draft")
+	if err := os.MkdirAll(draftDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(os.Getenv("HOME"), "projects", "r"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(draftDir, "issue.md"), []byte("---\ntitle: Old title\n---\n\nOld body\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	agent := filepath.Join(t.TempDir(), "no-draft")
+	if err := os.WriteFile(agent, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	flagAgent = agent
+	t.Cleanup(func() { flagAgent = "" })
+
+	err := runIssueCreate("A brief the agent ignores")
+	if err == nil || !strings.Contains(err.Error(), "issue.md") {
+		t.Fatalf("want missing fresh draft error, got %v", err)
+	}
+	if strings.Contains(read(t, ghLog), "issue\ncreate") {
+		t.Errorf("opened an issue from the stale draft:\n%s", read(t, ghLog))
+	}
+}
+
+func TestIssueCreateDryRunStartsNothingAndCreatesNothing(t *testing.T) {
+	signRepo(t)
+	remoteBase, ghLog := harness(t)
+	flagAgent = filepath.Join(t.TempDir(), "must-not-run")
+	flagDryRun = true
+	t.Cleanup(func() { flagAgent, flagDryRun = "", false })
+	out := captureStdout(t)
+
+	if err := runIssueCreate("A dry-run issue"); err != nil {
+		t.Fatal(err)
+	}
+	if got := out(); !strings.Contains(got, "dry run: would run the agent") || !strings.Contains(got, "would then open an issue in o/r") {
+		t.Errorf("unexpected dry-run output:\n%s", got)
+	}
+	if strings.Contains(read(t, ghLog), "issue\ncreate") {
+		t.Errorf("dry run opened an issue:\n%s", read(t, ghLog))
+	}
+	if _, err := os.Stat(filepath.Join(remoteBase, "o", "r", "issue-draft")); !os.IsNotExist(err) {
+		t.Errorf("dry run wrote the box draft directory: %v", err)
+	}
+}
+
+func TestIssueCreateDryRunValidatesAnExistingDraftWithoutConsumingIt(t *testing.T) {
+	signRepo(t)
+	remoteBase, ghLog := harness(t)
+	draftDir := filepath.Join(remoteBase, "o", "r", "issue-draft")
+	if err := os.MkdirAll(draftDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	draftPath := filepath.Join(draftDir, "issue.md")
+	if err := os.WriteFile(draftPath, []byte("---\ntitle: Preview me\n---\n\nBody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	flagDryRun = true
+	t.Cleanup(func() { flagDryRun = false })
+	out := captureStdout(t)
+
+	if err := runIssueCreate(""); err != nil {
+		t.Fatal(err)
+	}
+	if got := out(); !strings.Contains(got, `would open "Preview me" in o/r`) {
+		t.Errorf("unexpected output:\n%s", got)
+	}
+	if strings.Contains(read(t, ghLog), "issue\ncreate") {
+		t.Errorf("dry run opened an issue:\n%s", read(t, ghLog))
+	}
+	if got := read(t, draftPath); got == "" {
+		t.Error("dry run consumed the draft")
 	}
 }
 

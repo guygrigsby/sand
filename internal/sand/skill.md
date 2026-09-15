@@ -1,6 +1,6 @@
 ---
 name: sand
-description: Work GitHub issues, PR review comments and failing CI checks on the sandbox box, where sand puts issue context, review threads and CI failures under ~/.sand/<owner>/<repo>/. Use when asked to brainstorm or implement the issue named by the current <user>/<issue>-... branch, address review feedback, reply to reviewer comments, work through a pulled PR review, or fix the failing checks pulled to pr-<n>/ci/.
+description: Work GitHub issues, PR reviews, review comments and failing CI checks on the sandbox box, where sand puts issue context, new review drafts, review threads and CI failures under ~/.sand/<owner>/<repo>/. Use when asked to review the current branch, draft or write a new GitHub issue, brainstorm or implement the issue named by the current <user>/<issue>-... branch, address review feedback, reply to reviewer comments, work through a pulled PR review, or fix the failing checks pulled to pr-<n>/ci/.
 ---
 
 # Working GitHub issues and PR reviews on the box
@@ -43,6 +43,34 @@ things follow, and both are on you:
 
 ## New issues
 
+When the user asks you to write or draft a new issue, create
+`<remote_dir>/<owner>/<repo>/issue-draft/issue.md`. A sand-started prompt names the exact path. In
+an ordinary harness conversation, use the sand base and owner/repo already named by the task; if
+none is named, derive the GitHub owner/repo from this checkout's `origin` and use the default base
+`~/.sand`. Create the directory if needed.
+
+The file has YAML front matter with one non-empty, single-line `title`, then the proper GitHub
+Markdown body:
+
+```markdown
+---
+title: A concise issue title
+---
+
+The issue body.
+```
+
+No fix needs to exist, and the current branch is not part of the issue; consult existing code and
+docs only when they help verify or clarify the request. Load the voice skill's rules, voice and
+matching corpus samples. Preserve useful code fences. Describe the problem, desired outcome and
+material constraints; do not invent facts or prescribe an implementation the request does not
+require. Do not edit code, commit or try to publish the issue. Tell the user where you wrote the
+draft and that `sand issue create` on the Mac will publish it. The Mac consumes the file after
+creating the issue through authenticated `gh`; this box still gets no GitHub credential.
+
+As a convenience, `sand issue create <brief>` may start you only to do this drafting job. Follow
+the same file contract and restrictions from its prompt.
+
 `sand new <issue-number>` puts the issue at `~/.sand/<owner>/<repo>/issue-<n>/issue.md` and
 checks out `<prefix>/<n>-<title>` in this repo, the prefix being whoever runs sand on the Mac
 (their configured `branch_prefix`; sand requires one). Read `issue.md` before brainstorming or
@@ -51,6 +79,57 @@ with what changed, include any risk that remains and end with `Fixes: #<n>`. Do 
 test plan. `sand up` on the Mac refuses to open the PR without this file.
 
 `sand pr create` on the Mac may start you only to draft that PR. Its prompt names the optional issue path and required output files. Load the voice skill's `pr-description` register, including `~/.claude/voice/rules.md`, `~/.claude/voice/voice.md` and matching corpus samples. Inspect the complete branch diff and commit history plus the issue when one is linked. Write one line to `pr-title.txt` and proper GitHub Markdown to `pr-description.md`, preserving useful code fences. Do not edit code or commit during that run.
+
+## Writing a new PR review
+
+When you are asked to review the current branch, act as a reviewer rather than as the author.
+Inspect the complete diff from its merge base with the base branch, relevant surrounding code,
+and tests. Use a base named by the user; otherwise read `refs/remotes/origin/HEAD`, falling back to
+`origin/main` only when needed. Do not edit code, commit, answer an existing review thread or write
+under `pr-<n>/`. Findings here become new inline review comments, not responses.
+
+Derive the GitHub owner/repo from `origin`, read the exact current branch and full commit with
+`git branch --show-current` and `git rev-parse HEAD`, and use the configured sand base named in the
+conversation or `~/.sand` by default. Write the draft under
+`<remote_dir>/<owner>/<repo>/reviews/<branch>/`; slashes in the branch are directory separators.
+Before writing, remove only an earlier `review.md` and comment Markdown files in that exact branch
+directory so findings from an older pass cannot leak into this one.
+
+Write `reviews/<branch>/review.md` with YAML front matter recording the exact branch, full commit
+and comparison base:
+
+```markdown
+---
+branch: person/topic
+commit: 0123456789abcdef0123456789abcdef01234567
+base: origin/main
+---
+```
+
+Then write one `comment-NNN.md` per finding. The body is the exact GitHub comment and the front
+matter locates it:
+
+```markdown
+---
+path: internal/example.go
+line: 42
+side: RIGHT
+---
+
+This error path returns before the descriptor is closed.
+```
+
+Only report concrete, actionable defects introduced by the branch. Put each comment on a line
+that is part of the PR diff: `side: RIGHT` and the new-file line number for added or modified
+code, or `side: LEFT` and the old-file line number for a deleted line. Use repository-relative
+paths. Do not add praise, a review summary, speculative concerns or a reply/commit/status field.
+If there are no findings, write only `review.md` and report that; `sand pr review` will create
+nothing from an empty draft.
+
+Finish by naming the branch, reviewed commit, and files written. The user then checks out that
+branch on the Mac and runs `sand pr review`. The Mac verifies that the commit still equals the
+GitHub PR head, creates all comments in one pending review, and leaves it unsubmitted for the user
+to inspect and submit. Never run `sand`, `gh`, or try to publish the review from this box.
 
 ## Review files
 

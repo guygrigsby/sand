@@ -21,11 +21,12 @@ type Target struct {
 	Repo   string
 	Number int
 
-	// Filled in by Fetch.
-	Title  string
-	URL    string
-	Branch string
-	Author string
+	// Filled in by the GitHub lookups that need them.
+	Title   string
+	URL     string
+	Branch  string
+	HeadSHA string
+	Author  string
 }
 
 func (t Target) Slug() string { return t.Owner + "/" + t.Repo }
@@ -114,9 +115,10 @@ func currentBranchPR() (Target, bool, error) {
 		Title       string `json:"title"`
 		URL         string `json:"url"`
 		HeadRefName string `json:"headRefName"`
+		HeadRefOID  string `json:"headRefOid"`
 	}
 	if err := ghJSON(&prs, "pr", "list", "--repo", t.Slug(), "--head", branch, "--state", "open",
-		"--limit", "2", "--json", "number,title,url,headRefName"); err != nil {
+		"--limit", "2", "--json", "number,title,url,headRefName,headRefOid"); err != nil {
 		return Target{}, false, err
 	}
 	if len(prs) == 0 {
@@ -127,7 +129,7 @@ func currentBranchPR() (Target, bool, error) {
 		return Target{}, false, fmt.Errorf("more than one open PR for branch %q in %s", branch, t.Slug())
 	}
 	pr := prs[0]
-	t.Number, t.Title, t.URL, t.Branch = pr.Number, pr.Title, pr.URL, pr.HeadRefName
+	t.Number, t.Title, t.URL, t.Branch, t.HeadSHA = pr.Number, pr.Title, pr.URL, pr.HeadRefName, pr.HeadRefOID
 	return t, true, nil
 }
 
@@ -157,9 +159,8 @@ func currentBranch() string {
 	return strings.TrimSpace(string(out))
 }
 
-// LoadURL fills in the PR's web URL, which push needs to link the fixing commit and
-// which pull gets for free from the thread query. Asking gh rather than assembling
-// https://github.com/... keeps it right on an Enterprise host.
+// LoadURL fills in the PR metadata used by posting commands. Asking gh rather than
+// assembling https://github.com/... keeps the URL right on an Enterprise host.
 func (t *Target) LoadURL() error {
 	if t.URL != "" {
 		return nil
@@ -168,13 +169,14 @@ func (t *Target) LoadURL() error {
 		URL         string `json:"url"`
 		Title       string `json:"title"`
 		HeadRefName string `json:"headRefName"`
+		HeadRefOID  string `json:"headRefOid"`
 	}
 	err := ghJSON(&pr, "pr", "view", strconv.Itoa(t.Number),
-		"--repo", t.Slug(), "--json", "url,title,headRefName")
+		"--repo", t.Slug(), "--json", "url,title,headRefName,headRefOid")
 	if err != nil {
 		return err
 	}
-	t.URL, t.Title, t.Branch = pr.URL, pr.Title, pr.HeadRefName
+	t.URL, t.Title, t.Branch, t.HeadSHA = pr.URL, pr.Title, pr.HeadRefName, pr.HeadRefOID
 	return nil
 }
 
@@ -596,8 +598,17 @@ func splitResponse(out string) (int, http.Header, string) {
 }
 
 func gh(args ...string) (string, error) {
+	return ghInput(nil, args...)
+}
+
+// ghInput is gh with an optional stdin payload. Review creation uses --input - so the
+// Markdown bodies never pass through argv or shell quoting.
+func ghInput(input []byte, args ...string) (string, error) {
 	var stdout, stderr bytes.Buffer
 	cmd := exec.Command("gh", args...)
+	if input != nil {
+		cmd.Stdin = bytes.NewReader(input)
+	}
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err := cmd.Run()
