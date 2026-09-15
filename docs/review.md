@@ -14,6 +14,12 @@ endpoint. It omits the review event so GitHub leaves the result pending for a hu
 submit. Success consumes the branch draft, failure preserves it, and `--dry-run` only validates
 and previews. This path never calls the threaded reply endpoint.
 
+No draft for the branch is the common case, not a fetch failure: a missing remote directory
+fetches as an empty one, so the unguarded read reported a local temp path
+(`/var/folders/.../sand-fetch-901660121/review.md: no such file or directory`) that says nothing
+about which box path was looked at or what to do. `sand pr review` names the box path it wanted
+and says to have the agent review the branch first.
+
 - `sand comments pull [pr]`: unresolved inline review threads plus review summary bodies for
   the PR, written to `<remote_dir>/<owner>/<repo>/pr-<n>/` on the box: `index.md` plus one
   `c-<comment-id>.md` per thread. Re-running is safe; drafts on the box survive.

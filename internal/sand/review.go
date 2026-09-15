@@ -119,6 +119,12 @@ func loadReviewDraft(cfg Config, remotePath string) (reviewDraft, error) {
 
 	manifest := filepath.Join(dir, "review.md")
 	raw, err := os.ReadFile(manifest)
+	// A missing manifest is the normal "nobody reviewed this yet" case, not a fetch failure:
+	// fetchDir answers a missing remote directory with an empty one, so the raw os error names
+	// a temp path the user cannot act on.
+	if os.IsNotExist(err) {
+		return reviewDraft{}, fmt.Errorf("no review draft at %s:%s; ask the box agent to review this branch, then run `sand pr review` again", cfg.Host, remotePath)
+	}
 	if err != nil {
 		return reviewDraft{}, fmt.Errorf("reading %s:%s/review.md: %w", cfg.Host, remotePath, err)
 	}
