@@ -1,4 +1,18 @@
-# PR review comments: `sand comments pull` / `push`
+# PR review comments: `sand pr review`, `sand comments pull` / `push`
+
+## New comments: `sand pr review`
+
+New findings travel separately from replies. An agent reviewing a local box branch writes
+`review.md` and one `comment-NNN.md` per finding beneath
+`<remote_dir>/<owner>/<repo>/reviews/<branch>/`. The manifest pins the branch and full head commit;
+each comment's YAML front matter carries `path`, `line` and diff `side`, and its Markdown body is
+sent unchanged.
+
+On the Mac, `sand pr review [pr]` resolves the PR (the checked-out branch by default), rejects a
+draft for any other branch or commit, and creates all comments atomically through the create-review
+endpoint. It omits the review event so GitHub leaves the result pending for a human to inspect and
+submit. Success consumes the branch draft, failure preserves it, and `--dry-run` only validates
+and previews. This path never calls the threaded reply endpoint.
 
 - `sand comments pull [pr]`: unresolved inline review threads plus review summary bodies for
   the PR, written to `<remote_dir>/<owner>/<repo>/pr-<n>/` on the box: `index.md` plus one
