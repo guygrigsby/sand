@@ -173,6 +173,36 @@ func TestPRReviewFailureKeepsDraft(t *testing.T) {
 	}
 }
 
+func TestPRReviewIgnoresHiddenDraftFiles(t *testing.T) {
+	dir, _ := signRepo(t)
+	mustRun(t, dir, "git", "switch", "--quiet", "-c", "topic")
+	remoteBase, _ := harness(t)
+	flagPR, flagDryRun = "", true
+	t.Cleanup(func() { flagPR, flagDryRun = "", false })
+	draftDir := filepath.Join(remoteBase, "o", "r", "reviews", "topic")
+	if err := os.MkdirAll(draftDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(draftDir, "review.md"), []byte("---\nbranch: topic\ncommit: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(draftDir, "comment.md"), []byte("---\npath: foo.go\nline: 1\nside: RIGHT\n---\n\nFinding.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// What a Mac tar leaves behind: not parseable, and not a finding.
+	if err := os.WriteFile(filepath.Join(draftDir, "._comment.md"), []byte("Mac metadata\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := captureStdout(t)
+	if err := runPRReview(nil, os.Stdout); err != nil {
+		t.Fatalf("a hidden file failed the draft: %v", err)
+	}
+	if !strings.Contains(out(), "1 pending review comment(s)") {
+		t.Errorf("wrong comment count:\n%s", out())
+	}
+}
+
 func TestPRReviewWithoutADraftSaysSo(t *testing.T) {
 	dir, _ := signRepo(t)
 	mustRun(t, dir, "git", "switch", "--quiet", "-c", "topic")
