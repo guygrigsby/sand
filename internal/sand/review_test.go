@@ -173,6 +173,25 @@ func TestPRReviewFailureKeepsDraft(t *testing.T) {
 	}
 }
 
+func TestPRReviewWithoutADraftSaysSo(t *testing.T) {
+	dir, _ := signRepo(t)
+	mustRun(t, dir, "git", "switch", "--quiet", "-c", "topic")
+	_, ghLog := harness(t)
+	flagPR = ""
+	t.Cleanup(func() { flagPR = "" })
+
+	err := runPRReview(nil, os.Stdout)
+	if err == nil || !strings.Contains(err.Error(), "no review draft at") {
+		t.Fatalf("want a missing-draft error, got %v", err)
+	}
+	if strings.Contains(err.Error(), "sand-fetch-") {
+		t.Errorf("error names the local temp copy instead of the box path: %v", err)
+	}
+	if strings.Contains(read(t, ghLog), "pulls/42/reviews") {
+		t.Error("created a review with no draft")
+	}
+}
+
 func TestPRReviewDryRunKeepsDraft(t *testing.T) {
 	dir, _ := signRepo(t)
 	mustRun(t, dir, "git", "switch", "--quiet", "-c", "topic")
