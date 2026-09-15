@@ -120,6 +120,12 @@ remotes can change the answer.
   messages do not reopen it, and an unsent draft always survives a re-pull. If the posted reply
   was deleted, `replied_at` supplies the boundary when available.
 - **Review summary bodies are read-only context.** GitHub has no threaded reply for them.
+- **The transfer sets `COPYFILE_DISABLE=1` and sweeps `._*` off the box.** bsdtar on the Mac
+  archives an AppleDouble sidecar per file, so every pull left `._index.md` beside `index.md` on
+  the box: files the agent lists and reads, and files a `*.md` glob matches (`c-*.md` and
+  `ci-*.md` did not, `sand pr review`'s did). `sendDir` deletes them after unpacking because
+  boxes already hold a pile of them and nothing sand writes starts with `._`; the review draft
+  loader skips hidden names for the dirs `sendDir` never touches.
 - **The diff fence outruns the hunk.** Nothing in a thread file can be written with a fixed
   three-backtick fence: review a markdown file and the hunk arrives with fences in it. An added
   line is safe, `+` cannot start a fence, but an unchanged line is prefixed with one space and

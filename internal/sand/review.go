@@ -151,7 +151,9 @@ func loadReviewDraft(cfg Config, remotePath string) (reviewDraft, error) {
 	sort.Strings(paths)
 	draft := reviewDraft{Branch: meta.Branch, Commit: strings.ToLower(meta.Commit), Base: meta.Base, files: []string{"review.md"}}
 	for _, file := range paths {
-		if filepath.Base(file) == "review.md" {
+		// Glob's `*` matches a leading dot, so a stray `._comment.md` or editor dotfile would be
+		// parsed as a finding and fail the whole draft. Nothing the agent writes is hidden.
+		if name := filepath.Base(file); name == "review.md" || strings.HasPrefix(name, ".") {
 			continue
 		}
 		comment, err := parseReviewComment(file)

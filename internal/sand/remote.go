@@ -139,7 +139,12 @@ func segment(s string) string {
 func sendDir(host, localDir, remoteDir string) error {
 	q := remoteQuote(remoteDir)
 	tar := exec.Command("tar", "czf", "-", "-C", localDir, ".")
-	ssh := exec.Command(sshBin(), host, fmt.Sprintf("mkdir -p %s && tar xzf - -C %s", q, q))
+	// bsdtar on the Mac archives an AppleDouble ._name sidecar beside every file unless this is
+	// set, so a pull left the box holding `._index.md` next to `index.md`: junk the agent reads
+	// and `*.md` globs match. The delete is for the boxes that already collected a pile of them;
+	// nothing sand writes starts with "._", and it must not fail a transfer that succeeded.
+	tar.Env = append(os.Environ(), "COPYFILE_DISABLE=1")
+	ssh := exec.Command(sshBin(), host, fmt.Sprintf("mkdir -p %s && tar xzf - -C %s && { find %s -name '._*' -type f -delete || true; }", q, q, q))
 
 	pipe, err := tar.StdoutPipe()
 	if err != nil {
