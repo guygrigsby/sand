@@ -876,6 +876,65 @@ func TestSignPushesWhenAsked(t *testing.T) {
 	}
 }
 
+// The branch was pushed, the branch was deleted on GitHub, and `git fetch` does not prune: the
+// tracking ref still named a hash on a ref that no longer existed, so the lease demanded it, and
+// `sand sign --push` plus every hand-typed `git push --force-with-lease` after it ended in
+// "stale info" on a freshly signed branch.
+func TestSignPushesAfterTheRemoteBranchWasDeleted(t *testing.T) {
+	dir, remote := signRepo(t)
+	mustRun(t, dir, "git", "push", "--quiet", remote, "feature")
+	mustRun(t, dir, "git", "fetch", "--quiet", "origin")
+	deleted := mustRun(t, dir, "git", "rev-parse", "refs/remotes/origin/feature")
+	mustRun(t, dir, "git", "push", "--quiet", "--delete", remote, "feature") // the PR merged, say
+	if got := mustRun(t, dir, "git", "rev-parse", "refs/remotes/origin/feature"); got != deleted {
+		t.Fatalf("the test did not reproduce a stale tracking ref: %s", short(got))
+	}
+
+	var out strings.Builder
+	o := signOpts(&out, "")
+	o.Push = true
+	res, err := Sign(o)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	if !res.Pushed {
+		t.Fatalf("nothing pushed\n%s", out.String())
+	}
+	local := mustRun(t, dir, "git", "rev-parse", "feature")
+	if pushed := mustRun(t, dir, "git", "--git-dir", remote, "rev-parse", "feature"); pushed != local {
+		t.Fatalf("remote at %s, local at %s\n%s", short(pushed), short(local), out.String())
+	}
+	if !strings.Contains(out.String(), "no longer has feature") {
+		t.Errorf("re-creating a deleted branch was not reported:\n%s", out.String())
+	}
+}
+
+// A clone whose fetch refspec covers only the default branch never gets a remote-tracking ref
+// for the branch being signed, so the lease was built from an empty value, claimed the branch did
+// not exist on the remote, and GitHub rejected every attempt with "stale info": a signed branch
+// that no re-run and no hand-typed `git push --force-with-lease` could land.
+func TestSignPushesWithoutARemoteTrackingRef(t *testing.T) {
+	dir, remote := signRepo(t)
+	mustRun(t, dir, "git", "push", "--quiet", remote, "feature") // the unsigned branch is on GitHub
+	mustRun(t, dir, "git", "config", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main")
+	mustRun(t, dir, "git", "update-ref", "-d", "refs/remotes/origin/feature")
+
+	var out strings.Builder
+	o := signOpts(&out, "")
+	o.Push = true
+	res, err := Sign(o)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	if !res.Pushed {
+		t.Fatalf("nothing pushed\n%s", out.String())
+	}
+	local := mustRun(t, dir, "git", "rev-parse", "feature")
+	if pushed := mustRun(t, dir, "git", "--git-dir", remote, "rev-parse", "feature"); pushed != local {
+		t.Fatalf("remote at %s, local at %s\n%s", short(pushed), short(local), out.String())
+	}
+}
+
 // Both answers come from one stdin, so the reader behind the first prompt must not swallow
 // the second: piping "y\ny\n" has to sign and push.
 func TestSignAnswersBothPromptsFromOneStdin(t *testing.T) {

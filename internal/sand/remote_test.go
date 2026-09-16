@@ -128,6 +128,35 @@ exec /bin/sh -c "$*"
 	}
 }
 
+func TestSendDirSweepsAppleDoubleFiles(t *testing.T) {
+	base, _ := harness(t)
+	captureStdout(t)
+	if err := runPull(nil); err != nil {
+		t.Fatal(err)
+	}
+	prDir := filepath.Join(base, "o", "r", "pr-42")
+	junk := []string{filepath.Join(prDir, "._index.md"), filepath.Join(prDir, "ci", "._ci-build.md")}
+	if err := os.MkdirAll(filepath.Join(prDir, "ci"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range junk {
+		if err := os.WriteFile(p, []byte("Mac metadata\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := runPull(nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range junk {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("AppleDouble file survived a pull: %s (%v)", p, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(prDir, "index.md")); err != nil {
+		t.Errorf("the sweep took a real file with it: %v", err)
+	}
+}
+
 func TestRemoteLockReportsLostConnection(t *testing.T) {
 	base, _ := harness(t)
 	lock, err := lockRemote(Config{Host: "box", RemoteDir: base}, "r")

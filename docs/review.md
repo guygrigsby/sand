@@ -14,6 +14,12 @@ endpoint. It omits the review event so GitHub leaves the result pending for a hu
 submit. Success consumes the branch draft, failure preserves it, and `--dry-run` only validates
 and previews. This path never calls the threaded reply endpoint.
 
+No draft for the branch is the common case, not a fetch failure: a missing remote directory
+fetches as an empty one, so the unguarded read reported a local temp path
+(`/var/folders/.../sand-fetch-901660121/review.md: no such file or directory`) that says nothing
+about which box path was looked at or what to do. `sand pr review` names the box path it wanted
+and says to have the agent review the branch first.
+
 - `sand comments pull [pr]`: unresolved inline review threads plus review summary bodies for
   the PR, written to `<remote_dir>/<owner>/<repo>/pr-<n>/` on the box: `index.md` plus one
   `c-<comment-id>.md` per thread. Re-running is safe; drafts on the box survive.
@@ -114,6 +120,12 @@ remotes can change the answer.
   messages do not reopen it, and an unsent draft always survives a re-pull. If the posted reply
   was deleted, `replied_at` supplies the boundary when available.
 - **Review summary bodies are read-only context.** GitHub has no threaded reply for them.
+- **The transfer sets `COPYFILE_DISABLE=1` and sweeps `._*` off the box.** bsdtar on the Mac
+  archives an AppleDouble sidecar per file, so every pull left `._index.md` beside `index.md` on
+  the box: files the agent lists and reads, and files a `*.md` glob matches (`c-*.md` and
+  `ci-*.md` did not, `sand pr review`'s did). `sendDir` deletes them after unpacking because
+  boxes already hold a pile of them and nothing sand writes starts with `._`; the review draft
+  loader skips hidden names for the dirs `sendDir` never touches.
 - **The diff fence outruns the hunk.** Nothing in a thread file can be written with a fixed
   three-backtick fence: review a markdown file and the hunk arrives with fences in it. An added
   line is safe, `+` cannot start a fence, but an unchanged line is prefixed with one space and
