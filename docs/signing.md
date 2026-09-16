@@ -208,5 +208,17 @@ history on the box. Flags: `--remote` (origin), `--base` (main), `--yes`, `--pus
   commit is a refusal returned to `sand up`, whose fallback push can only fast-forward.
   The push leases against the remote hash captured before signing and names the verified
   result SHA explicitly. A background fetch cannot authorize overwriting newer work.
+- **That hash comes from `git ls-remote`, not from `refs/remotes/<remote>/<branch>`.** The
+  tracking ref is a cache of the remote, and it can be wrong in both directions. What happened:
+  the branch was deleted on GitHub after a round, `git fetch <remote>` does not prune, so the
+  tracking ref still said `702ce20`, the lease demanded that hash on a ref GitHub no longer had,
+  and a freshly signed branch could not be pushed by `sand sign --push` or by hand, both ending
+  in `! [rejected] (stale info)`. The other direction is a clone whose `remote.origin.fetch`
+  covers the default branch only: the tracking ref is never created and the lease claims a branch
+  GitHub does have is absent. Neither message mentions refspecs or pruning. Signing asks the
+  remote for the hash, fetches `+refs/heads/<branch>:refs/remotes/<remote>/<branch>` so the
+  lineage check, the repair rebase and `sand status` see the same thing, and when the remote has
+  no such branch, says so and drops the stale tracking ref rather than leasing against a hash
+  that is nowhere. Same treatment the box already got: `branchHeadOn` is one helper for both.
 - **The publish path checks `--dry-run` too.** An already signed branch skips the rewrite but
   can still need publishing. A preview cannot push it or realign the box, even with `--push`.

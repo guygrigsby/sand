@@ -165,7 +165,10 @@ func Sign(o SignOpts) (SignResult, error) {
 	imported := head // what the box had when this run started, for alignBox
 	// Pin the lease before signing. A background fetch must not authorize replacing
 	// commits that appeared while the operator was reviewing or signing this head.
-	remoteBefore, _ := g.capture("rev-parse", "--verify", "--quiet", "refs/remotes/"+o.Remote+"/"+branch)
+	remoteBefore, err := pinRemoteBranch(g, o, branch)
+	if err != nil {
+		return res, err
+	}
 	commits, err := g.branchCommits(head, base)
 	if err != nil {
 		return res, err
@@ -463,7 +466,7 @@ func importBranch(g gitCmd, o SignOpts, branch string) error {
 // "exit status 128" says neither. One extra question to the box, only on the way out: it either
 // answers and does not have the branch, or it does not answer at all.
 func importFailed(g gitCmd, o SignOpts, branch string, fetchErr error) error {
-	head, err := boxBranchHead(g, o.Box, branch)
+	head, err := branchHeadOn(g, o.Box, branch)
 	switch {
 	case err != nil:
 		return fmt.Errorf("%s did not answer, so %s cannot be imported and nothing was signed: %w\n"+
@@ -515,15 +518,66 @@ func boxCurrentBranch(g gitCmd, box string) (string, error) {
 	return "", nil
 }
 
-// boxBranchHead is the box's head for one branch: empty when it does not have it, an error when
-// it could not be asked. One implementation, because every caller needs those two apart and a
-// bool answer loses the difference.
-func boxBranchHead(g gitCmd, box, branch string) (string, error) {
-	refs, err := g.capture("ls-remote", box, "refs/heads/"+branch)
+// branchHeadOn is a remote's head for one branch, asked of the remote itself: empty when it does
+// not have it, an error when it could not be asked. One implementation, because every caller
+// needs those two apart and a bool answer loses the difference. The box and `origin` both go
+// through it; neither of them is a ref this checkout can be trusted to have.
+func branchHeadOn(g gitCmd, remote, branch string) (string, error) {
+	refs, err := g.capture("ls-remote", remote, "refs/heads/"+branch)
 	if err != nil {
 		return "", err
 	}
 	head, _, _ := strings.Cut(strings.TrimSpace(refs), "\t")
+	return head, nil
+}
+
+// pinRemoteBranch is what the remote holds for this branch at the moment signing starts, with
+// this checkout's remote-tracking ref and objects brought to match it.
+//
+// It used to be a `rev-parse refs/remotes/<remote>/<branch>` after a plain `git fetch <remote>`,
+// and that ref is a cache of the remote, not the remote: it can be wrong in both directions and
+// the lease is then wrong with it. The way it happened: the branch was deleted on GitHub after a
+// round, `git fetch <remote>` does not prune, so the tracking ref still said 702ce20, the lease
+// demanded that hash on a ref GitHub no longer had, and every attempt ended in
+// `! [rejected] (stale info)` on a branch that had just been signed. The other direction is a
+// clone whose remote.<remote>.fetch covers only the default branch: the tracking ref is never
+// created, so the lease claims a branch GitHub does have is absent, with the same rejection.
+// Neither message says anything about refspecs or pruning, and the operator's own
+// `git push --force-with-lease` reads the same bad ref and fails identically.
+//
+// So ask the remote. One round trip next to the fetch that already happens.
+func pinRemoteBranch(g gitCmd, o SignOpts, branch string) (string, error) {
+	remote := o.Remote
+	head, err := branchHeadOn(g, remote, branch)
+	if err != nil {
+		return "", fmt.Errorf("asking %s what %s is there failed, and the push lease is that answer, "+
+			"so nothing was rewritten: %w", remote, branch, err)
+	}
+	if head == "" {
+		// Never pushed, or pushed and since deleted. The lease then says "must not exist", which
+		// is true, and the stale ref goes: it is the thing that made the lease lie, and the
+		// lineage check and `sand status` read it next. Deleting a cache loses nothing, the
+		// commits it named are on the branch or in its reflog.
+		ref := "refs/remotes/" + remote + "/" + branch
+		if stale, _ := g.capture("rev-parse", "--verify", "--quiet", ref); stale != "" {
+			fmt.Fprintf(o.Out, "%s no longer has %s; this checkout still had it at %s, and pushing "+
+				"re-creates the branch there.\n", remote, branch, short(stale))
+			if err := g.run("update-ref", "-d", ref); err != nil {
+				return "", fmt.Errorf("%s no longer has %s and dropping this checkout's stale %s failed, "+
+					"so the push would lease against a hash that is nowhere; nothing was rewritten: %w",
+					remote, branch, ref, err)
+			}
+		}
+		return "", nil
+	}
+	// Into the tracking ref rather than FETCH_HEAD: the lineage check, the repair rebase and
+	// `sand status` all read <remote>/<branch>, and a missing one is as wrong for them as for
+	// the lease.
+	spec := fmt.Sprintf("+refs/heads/%s:refs/remotes/%s/%s", branch, remote, branch)
+	if err := g.run("fetch", "--quiet", remote, spec); err != nil {
+		return "", fmt.Errorf("%s has %s at %s and fetching it failed, so this run cannot tell what a "+
+			"push would replace; nothing was rewritten: %w", remote, branch, short(head), err)
+	}
 	return head, nil
 }
 
@@ -534,7 +588,7 @@ func onBox(g gitCmd, o SignOpts, branch string) bool {
 	if o.Box == "" {
 		return false
 	}
-	head, err := boxBranchHead(g, o.Box, branch)
+	head, err := branchHeadOn(g, o.Box, branch)
 	return err == nil && head != ""
 }
 
@@ -562,7 +616,7 @@ func alignBox(g gitCmd, o SignOpts, branch, imported, head string) bool {
 	}
 
 	fmt.Fprintf(o.Out, "\nRealigning the box, which is still on the pre-signing %s:\n", short(imported))
-	boxHead, err := boxBranchHead(g, o.Box, branch)
+	boxHead, err := branchHeadOn(g, o.Box, branch)
 	if err != nil {
 		fmt.Fprintf(o.Out, "  could not read %s: %v\n", o.Box, err)
 		fmt.Fprintf(o.Out, "  %s has the signed branch; the box does not. Re-run when it answers.\n", o.Remote)
