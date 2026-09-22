@@ -41,6 +41,13 @@ things follow, and both are on you:
   signed and on the remote are the failure this arrow exists to prevent, and the Mac refuses to
   sign a branch carrying them. If the branch here looks behind or wrong, say so and stop.
 
+The Mac can select an existing sandbox worktree with `--worktree <sandbox-path>`.
+This applies to `comments pull`, `comments push`, `ci pull`, `sign`, `up`/`push`, `pr create`, `pr review` and `status`.
+Pull starts the agent in that worktree. Signing imports its branch and returns the signed history there.
+Keep work in the selected checkout and report its full path with the branch at handoff.
+The Mac uses the same flag on the next command, for example `sand up --worktree '~/projects/repo-fix'`.
+Review and CI files retain their usual PR directories and shared repo lock.
+
 ## New issues
 
 When the user asks you to write or draft a new issue, create

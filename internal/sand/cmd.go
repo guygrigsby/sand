@@ -171,6 +171,7 @@ func prReviewCmd() *cobra.Command {
 	}
 	c.Flags().StringVar(&flagPR, "pr", "", "PR number or URL (default: the PR for the current branch)")
 	c.Flags().BoolVar(&flagDryRun, "dry-run", false, "validate and print the comments, create no review")
+	worktreeFlag(c)
 	return c
 }
 
@@ -191,6 +192,7 @@ func prCreateCmd() *cobra.Command {
 	c.Flags().BoolVar(&flagDryRun, "dry-run", false, "show what would run, change nothing anywhere")
 	c.Flags().StringVar(&flagAgent, "agent", "", "agent command to run on the sandbox for this draft")
 	c.Flags().StringVar(&flagRepoDir, "repo-dir", "", "repo checkout on the sandbox (default ~/projects/<repo>)")
+	worktreeFlag(c)
 	return c
 }
 
@@ -245,6 +247,7 @@ func upCmd() *cobra.Command {
 	c.Flags().BoolVar(&flagOtherAuth, "allow-other-authors", false,
 		"sign commits made by someone other than this machine's git identity")
 	c.Flags().BoolVar(&flagDryRun, "dry-run", false, "preview each step; imports and fetches locally, but never signs, pushes or posts")
+	worktreeFlag(c)
 	return c
 }
 
@@ -297,7 +300,7 @@ func runUpTarget(cmd *cobra.Command, args []string, preset *Target) error {
 
 	fmt.Println("\n1/4 sign")
 	boxURL, boxHost, boxDir := thisRepoOnBox()
-	res, err := Sign(SignOpts{
+	res, err := signWorktree(SignOpts{
 		Branch:            branch,
 		Remote:            flagRemote,
 		Base:              flagBase,
@@ -460,7 +463,7 @@ func signCmd() *cobra.Command {
 			if len(args) > 0 {
 				o.Branch = args[0]
 			}
-			_, err := Sign(o)
+			_, err := signWorktree(o)
 			return err
 		},
 	}
@@ -471,6 +474,7 @@ func signCmd() *cobra.Command {
 		"sign commits made by someone other than this machine's git identity")
 	c.Flags().BoolVar(&flagPush, "push", false, "push with --force-with-lease once verified, without asking")
 	c.Flags().BoolVar(&flagDryRun, "dry-run", false, "show what would be signed, rewrite nothing and push nothing")
+	worktreeFlag(c)
 	return c
 }
 
@@ -490,10 +494,14 @@ func statusCmd() *cobra.Command {
 				return err
 			}
 			boxURL, _, _ := thisRepoOnBox()
+			repoDir := flagRepoDir
+			if selectedWorktree != nil {
+				repoDir = selectedWorktree.dir
+			}
 			return Status(StatusOpts{
 				Cfg: cfg, Target: target, HasPR: hasPR,
 				Remote: flagRemote, Base: flagBase,
-				Box: boxURL, RepoDir: flagRepoDir,
+				Box: boxURL, RepoDir: repoDir,
 				Out: cmd.OutOrStdout(),
 			})
 		},
@@ -502,6 +510,7 @@ func statusCmd() *cobra.Command {
 	c.Flags().StringVar(&flagRemote, "remote", "origin", "remote to measure against")
 	c.Flags().StringVar(&flagBase, "base", "main", "base branch on that remote")
 	c.Flags().StringVar(&flagRepoDir, "repo-dir", "", "the repo checkout on the box (default ~/projects/<repo>)")
+	worktreeFlag(c)
 	return c
 }
 
@@ -522,7 +531,10 @@ func setupStatus(args []string) (Config, Target, bool, error) {
 		if err != nil {
 			return cfg, Target{}, false, err
 		}
-		return cfg, target, true, target.LoadURL()
+		if err := target.LoadURL(); err != nil {
+			return cfg, Target{}, false, err
+		}
+		return cfg, target, true, checkWorktreeTarget(&target)
 	}
 	target, found, err := currentBranchPR()
 	return cfg, target, found, err
@@ -679,6 +691,7 @@ func commentsCmd() *cobra.Command {
 	pull.Flags().BoolVar(&flagNoAgent, "no-agent", false, "write the files and stop, starting nothing on the box")
 	pull.Flags().StringVar(&flagAgent, "agent", "", "run this command on the box instead of the configured harness")
 	pull.Flags().StringVar(&flagRepoDir, "repo-dir", "", "checkout on the box to run it in (default ~/projects/<repo>)")
+	worktreeFlag(pull)
 
 	push := &cobra.Command{
 		Use:   "push [pr-number|pr-url]",
@@ -695,6 +708,7 @@ func commentsCmd() *cobra.Command {
 	push.Flags().StringVar(&flagPR, "pr", "", "PR number or URL (default: the PR for the current branch)")
 	push.Flags().StringVar(&flagRemote, "remote", "origin", "remote whose copy of the branch the commit hashes must match")
 	push.Flags().BoolVar(&flagDryRun, "dry-run", false, "print the replies that would be posted, post nothing")
+	worktreeFlag(push)
 
 	c.AddCommand(pull, push)
 	return c
@@ -731,6 +745,7 @@ func ciCmd() *cobra.Command {
 	pull.Flags().BoolVar(&flagNoAgent, "no-agent", false, "write the files and stop, starting nothing on the box")
 	pull.Flags().StringVar(&flagAgent, "agent", "", "run this command on the box instead of the configured harness")
 	pull.Flags().StringVar(&flagRepoDir, "repo-dir", "", "checkout on the box to run it in (default ~/projects/<repo>)")
+	worktreeFlag(pull)
 
 	c.AddCommand(pull)
 	return c
@@ -1018,7 +1033,7 @@ func reportCIProgress(cfg Config, ciPath string) error {
 	}
 	fmt.Printf("%d worked on, %d left\n", fixed, left)
 	if fixed > 0 {
-		fmt.Println("next: sand up (signs and pushes the fixes; CI re-runs on the new head)")
+		fmt.Printf("next: sand up%s (signs and pushes the fixes; CI re-runs on the new head)\n", worktreeArg())
 	}
 	return nil
 }
@@ -1132,6 +1147,9 @@ func setup(args []string) (Config, Target, error) {
 		return cfg, Target{}, err
 	}
 	target, err := ResolveTarget(arg)
+	if err == nil {
+		err = checkWorktreeTarget(&target)
+	}
 	return cfg, target, err
 }
 
@@ -1152,6 +1170,9 @@ func thisRepoOnBox() (url, host, dir string) {
 	if err != nil {
 		return "", "", ""
 	}
+	if selectedWorktree != nil {
+		return cfg.Host + ":" + selectedWorktree.dir, cfg.Host, selectedWorktree.dir
+	}
 	top, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
 	if err != nil {
 		return "", "", ""
@@ -1171,9 +1192,13 @@ func agentRun(cfg Config, target Target, prompt string) (AgentRun, error) {
 			return AgentRun{}, err
 		}
 	}
+	dir := cmp.Or(flagRepoDir, checkoutDir(target))
+	if selectedWorktree != nil {
+		dir = selectedWorktree.dir
+	}
 	return AgentRun{
 		Host:    cfg.Host,
-		Dir:     cmp.Or(flagRepoDir, checkoutDir(target)),
+		Dir:     dir,
 		Lock:    agentLock(cfg.RemoteDir, target.Repo),
 		Command: argv,
 		Prompt:  prompt,
@@ -1364,8 +1389,8 @@ func reportProgress(cfg Config, target Target, remotePath string) error {
 	fmt.Printf("%d answered, %d left\n", answered, left)
 	if answered > 0 {
 		branch := cmp.Or(target.Branch, "<branch>")
-		fmt.Printf("next: sand up %d (signs %s, pushes it, then posts the replies)\n",
-			target.Number, branch)
+		fmt.Printf("next: sand up %d%s (signs %s, pushes it, then posts the replies)\n",
+			target.Number, worktreeArg(), branch)
 	}
 	return nil
 }
@@ -1406,7 +1431,7 @@ func runPush(args []string) error {
 		return err
 	}
 	if len(files)+failed == 0 {
-		return fmt.Errorf("nothing at %s:%s — run `sand comments pull` first", cfg.Host, remotePath)
+		return fmt.Errorf("nothing at %s:%s — run `sand comments pull%s` first", cfg.Host, remotePath, worktreeArg())
 	}
 
 	// Every reply quotes the commit that fixed the thread, and signing the branch rewrites
@@ -1620,7 +1645,7 @@ func requireSignedCommits(t Target) error {
 		}
 		fmt.Fprintf(&b, "\n  %s %q — %s", short(c.SHA), c.Subject, c.Reason)
 	}
-	fmt.Fprintf(&b, "\nsign them first, then push the replies:\n  sand sign %s", branch)
+	fmt.Fprintf(&b, "\nsign them first, then push the replies:\n  sand sign %s%s", branch, worktreeArg())
 	return fmt.Errorf("%s", b.String())
 }
 

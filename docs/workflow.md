@@ -1,5 +1,18 @@
 # Moving work: `status`, `issue create`, `new`, `up`, `shot`
 
+`--worktree <sandbox-path>` selects an existing sandbox checkout and its branch for `up`/`push`, `sign`, `pr create`, `pr review`, `status` and both pull commands.
+`comments push` accepts the same flag. Relative paths start at the sandbox login home; quoted `~/...` and absolute paths also work.
+The worktree must belong to the current repository. An explicit PR or branch must match its branch.
+Empty paths, missing checkouts and detached HEADs stop the command before it writes files or publishes anything.
+
+The selected path supplies the agent directory, import URL, receive checks and return push.
+Previously, these paths came from separate defaults, so a selected agent directory could differ from the checkout receiving signed history.
+Signing uses the branch's existing local worktree or creates a temporary checkout. Unrelated local branches and uncommitted files stay intact.
+Temporary checkouts are removed after the run; a dirty checkout remains with a warning so recovery cannot discard files.
+
+`--repo-dir` retains its directory-only meaning and cannot accompany `--worktree`.
+The repo lock remains shared because worktrees share Git refs and PR files. Separate locks would permit concurrent edits to the same drafts.
+
 ## Where the work is: `sand status [pr]`
 
 One read-only pass over all three machines, ending in one `next:` line. It decides nothing and
@@ -128,7 +141,7 @@ If the current branch has no open PR, its name must be `<branch_prefix>/<issue>-
 then runs the same GitHub signature verification. A missing description stops the run. `push`
 is an alias for `up` so both entry points have the same ordering and checks.
 
-Flags: `--pr`, `--remote`, `--base`, `-y/--yes`, `--allow-other-authors`, `--dry-run`. The dry run covers all four steps
+Flags: `--pr`, `--remote`, `--base`, `-y/--yes`, `--allow-other-authors`, `--dry-run`, `--worktree`. The dry run covers all four steps
 at once: it imports the box branch and fetches locally, but signs, pushes and posts nothing.
 Declining the rewrite at step 1 stops the run rather than
 posting replies about commits that were never signed.

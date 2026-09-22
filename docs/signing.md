@@ -5,7 +5,12 @@ branch from the box, then re-creates the commits the branch adds over `<remote>/
 not signed already, with `git commit-tree -S` under `git filter-branch`, verifies the result,
 offers to push with `--force-with-lease` and, once that push is on the remote, puts the same
 history on the box. Flags: `--remote` (origin), `--base` (main), `--yes`, `--push`, `--dry-run`,
-`--allow-other-authors`.
+`--allow-other-authors`, `--worktree`.
+
+`--worktree <sandbox-path>` names the sandbox checkout and selects its checked-out branch. An explicit branch argument must match it.
+The import, receive checks and return push all use this path, so the sandbox's primary checkout can stay on another branch.
+On the Mac, signing uses the branch's existing worktree or a temporary checkout. Other local checkouts retain their branches and uncommitted files.
+The same path applies inside `up`, `push` and `pr create`. Existing signature, lineage and lease checks still apply.
 
 - **Nothing to sign is not nothing to do.** A branch can arrive here fully signed with the remote
   still behind it: `git rebase` on a Mac with `commit.gpgsign` signs what it replays, so the

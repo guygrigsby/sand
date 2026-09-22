@@ -446,12 +446,13 @@ func nextStep(o StatusOpts, rep statusReport) string {
 	if o.HasPR {
 		pr = " " + strconv.Itoa(o.Target.Number)
 	}
+	pr += worktreeArg()
 	b, m, h := rep.box, rep.mac, rep.hub
 
 	switch {
 	case len(b.Dups) > 0:
-		return fmt.Sprintf("sand sign --push, which will refuse and print the recovery: "+
-			"%d commit(s) on the box are unsigned copies of commits already pushed", len(b.Dups))
+		return fmt.Sprintf("sand sign --push%s, which will refuse and print the recovery: "+
+			"%d commit(s) on the box are unsigned copies of commits already pushed", worktreeArg(), len(b.Dups))
 	case b.Agent:
 		return "nothing: an agent is working on the box, and a second one in that tree is not a race to lose"
 	case b.Dirty > 0:

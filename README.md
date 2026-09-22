@@ -119,6 +119,19 @@ Finer grained, if you want the steps apart:
     sand cleanup                  # delete all recovery branches left by sign and import
     sand comments push            # post the drafted replies
 
+Use `--worktree <path>` to select an existing worktree on the sandbox and use its branch:
+
+    sand comments pull --worktree '~/projects/repo-fix'
+    sand ci pull --worktree '~/projects/repo-fix'
+    sand up --worktree '~/projects/repo-fix'
+    sand sign --worktree '~/projects/repo-fix' --push
+
+The flag also works with `push`, `comments push`, `pr create`, `pr review` and `status`.
+Paths are absolute or relative to the sandbox login home. Quote `~/...` to prevent expansion on the Mac.
+Agents, commit imports and signed-history updates use that worktree. Signing uses the branch's local worktree or a temporary checkout and preserves unrelated checkouts.
+An explicit PR or branch must match the worktree. Detached or missing worktrees stop the command.
+`--worktree` and `--repo-dir` are mutually exclusive. Review and CI files retain their usual PR directories and repo lock.
+
 And the one thing that goes the other way for a different reason:
 
     sand shot                     # crop the screen, send it to the box, path on the clipboard

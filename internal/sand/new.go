@@ -177,6 +177,9 @@ func setupUp(args []string) (Config, Target, bool, error) {
 		if err := target.LoadURL(); err != nil {
 			return cfg, Target{}, false, err
 		}
+		if err := checkWorktreeTarget(&target); err != nil {
+			return cfg, Target{}, false, err
+		}
 		return cfg, target, false, nil
 	}
 	target, found, err := currentBranchPR()

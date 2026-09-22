@@ -6,6 +6,9 @@ failed and only the box can fix it. `ci pull` writes one markdown file per faili
 same lock, and reads the files back afterwards. Flags mirror `comments pull`, plus `--log-lines`
 and `--all`.
 
+`--worktree <sandbox-path>` selects the PR from that worktree's branch and starts the agent in the same directory.
+Use the same flag with `sand up` to sign and publish its fixes. An explicit PR must match the worktree.
+
 - **There is no `ci push`, and that is the design, not a missing half.** A review thread is a
   conversation and a reply belongs on it. A red check is not: the answer to it is a commit, which
   leaves the box the way every other commit does, through `sand up`, and CI running again on the
