@@ -221,8 +221,11 @@ func Sign(o SignOpts) (SignResult, error) {
 	}
 	if err := checkPreSigningLineage(g, dirty, o.Remote, o.Base, branch, head, o.Box); err != nil {
 		var le *lineageError
-		if !errors.As(err, &le) || o.DryRun ||
-			!confirm(answers, o.Out, "\nDrop the duplicated commit(s), replay the rest on the pushed branch, and continue?") {
+		if !errors.As(err, &le) || le == nil || o.DryRun {
+			return res, err
+		}
+		fmt.Fprintf(o.Out, "\n%s\n", le)
+		if !confirm(answers, o.Out, "\nDrop the duplicated commit(s), replay the rest on the pushed branch, and continue?") {
 			return res, err
 		}
 		head, commits, dirty, clean, err = repairLineage(g, o, le, branch, base, head)
@@ -736,6 +739,25 @@ func checkPreSigningLineage(g gitCmd, dirty []string, remote, base, branch, head
 		dups = append(dups, fmt.Sprintf("  %s is an unsigned copy of %s on %s: %q",
 			short(d.SHA), short(d.Twin), d.On, d.Subject))
 		le.merged = le.merged || d.On == remoteBase
+	}
+
+	// A shared prefix does not account for later published commits. The box can replace
+	// those commits with changed content, so replay over the remote tip can conflict.
+	if g.refExists(remoteBranch) {
+		args := []string{"log", "--oneline", remoteBranch, "--not", head, remoteBase}
+		for _, d := range twins {
+			args = append(args, d.Twin)
+		}
+		unmatched, err := g.capture(args...)
+		if err != nil {
+			return fmt.Errorf("checking published history before repair: %w", err)
+		}
+		if unmatched != "" {
+			return fmt.Errorf("refusing to repair: %s has published commits without matching copies in %s:\n%s\n"+
+				"The box may have replaced published commits with changed content. A rebase over them can conflict or combine both versions.\n"+
+				"No rebase or push was attempted. Preserve the published history and commit the intended changes on top before signing again.\n"+
+				"  git diff %s %s", remoteBranch, branch, unmatched, remoteBranch, branch)
+		}
 	}
 
 	// A commit whose twin is on the base is already merged, so it has to go rather than move:
