@@ -204,7 +204,7 @@ func Sign(o SignOpts) (SignResult, error) {
 	// The diffstat is the cheapest thing that answers "what am I putting my name on".
 	fmt.Fprintf(o.Out, "\nWhat the signature attests to, %s..%s:\n", base, short(head))
 	if err := g.run("diff", "--stat", base+"..HEAD"); err != nil {
-		return res, err
+		return res, fmt.Errorf("showing the branch diffstat: %w", err)
 	}
 
 	// Before the recovery branch and before the prompt: a refusal is not something to make
@@ -1079,7 +1079,10 @@ func (g gitCmd) capture(args ...string) (string, error) {
 }
 
 func (g gitCmd) run(args ...string) error {
-	return g.stream(exec.Command("git", args...))
+	// These commands write into sand's output stream. Letting Git start a pager for a
+	// large log or diffstat can close that stream early and abort signing with SIGPIPE.
+	// sand owns the prompt that follows the output, so print it directly instead.
+	return g.stream(exec.Command("git", append([]string{"--no-pager"}, args...)...))
 }
 
 func (g gitCmd) stream(c *exec.Cmd) error {
