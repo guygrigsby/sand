@@ -40,6 +40,10 @@ things follow, and both are on you:
   commit, and no branch built on what the branch used to be. Copies of commits that are already
   signed and on the remote are the failure this arrow exists to prevent, and the Mac refuses to
   sign a branch carrying them. If the branch here looks behind or wrong, say so and stop.
+- **Add changes after published commits.** A new Mac branch can still have an existing remote
+  branch. Recreated commits with changed content do not match their published copies. Sand
+  refuses automatic repair when published commits have no matching copies in the imported
+  history. Preserve the published commits and add the intended changes on top.
 
 The Mac can select an existing sandbox worktree with `--worktree <sandbox-path>`.
 This applies to `comments pull`, `comments push`, `ci pull`, `sign`, `up`/`push`, `pr create`, `pr review` and `status`.

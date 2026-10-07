@@ -12,6 +12,10 @@ The import, receive checks and return push all use this path, so the sandbox's p
 On the Mac, signing uses the branch's existing worktree or a temporary checkout. Other local checkouts retain their branches and uncommitted files.
 The same path applies inside `up`, `push` and `pr create`. Existing signature, lineage and lease checks still apply.
 
+Git prints review logs and diffstats without a pager.
+A pager can close its pipe before a large diffstat completes, which aborts signing with SIGPIPE.
+Smaller diffs can finish before the pipe closes, so they do not reproduce this failure.
+
 - **Nothing to sign is not nothing to do.** A branch can arrive here fully signed with the remote
   still behind it: `git rebase` on a Mac with `commit.gpgsign` signs what it replays, so the
   recovery from a duplicated lineage produces signed commits before signing ever sees them.
@@ -87,6 +91,13 @@ The same path applies inside `up`, `push` and `pr create`. Existing signature, l
   until the push replaces it. Afterwards the run recomputes what to sign from the new history
   and re-checks for twins, because a rebase that kept both sides of a conflict is a refusal
   again, not a signature.
+- **A matching prefix does not make every later commit safe to replay.** The box can replace
+  published commits with changed content while its first commit still matches the signed copy.
+  A new Mac branch does not imply a new remote branch. Rebase over the published tip can then
+  conflict or combine both versions. Before any repair offer, sand checks for published commits
+  outside the imported history, base and matching twins. It refuses the repair and lists those
+  commits. The operator must preserve the published history and add the intended changes on top.
+  Safe repair offers show the duplicate pairs and recovery commands before the prompt.
 - **Only what is unsigned, and what sits on top of it.** Review is a loop, so most runs meet a
   branch that is already partly signed, and re-signing a commit moves its hash, which kills
   every reply already posted quoting it. The already-signed commits go to filter-branch as
