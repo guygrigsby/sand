@@ -87,6 +87,13 @@ The same path applies inside `up`, `push` and `pr create`. Existing signature, l
   until the push replaces it. Afterwards the run recomputes what to sign from the new history
   and re-checks for twins, because a rebase that kept both sides of a conflict is a refusal
   again, not a signature.
+- **A matching prefix does not make every later commit safe to replay.** The box can replace
+  published commits with changed content while its first commit still matches the signed copy.
+  A new Mac branch does not imply a new remote branch. Rebase over the published tip can then
+  conflict or combine both versions. Before any repair offer, sand checks for published commits
+  outside the imported history, base and matching twins. It refuses the repair and lists those
+  commits. The operator must preserve the published history and add the intended changes on top.
+  Safe repair offers show the duplicate pairs and recovery commands before the prompt.
 - **Only what is unsigned, and what sits on top of it.** Review is a loop, so most runs meet a
   branch that is already partly signed, and re-signing a commit moves its hash, which kills
   every reply already posted quoting it. The already-signed commits go to filter-branch as

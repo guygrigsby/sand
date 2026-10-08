@@ -694,6 +694,10 @@ func TestSignRepairsAPreSigningLineageWhenAsked(t *testing.T) {
 	if !strings.Contains(out.String(), "Repaired:") {
 		t.Errorf("repair not reported:\n%s", out.String())
 	}
+	beforePrompt, _, _ := strings.Cut(out.String(), "Drop the duplicated")
+	if !strings.Contains(beforePrompt, "unsigned copies") || !strings.Contains(beforePrompt, "origin/feature") {
+		t.Errorf("repair prompt omitted the duplicate history:\n%s", out.String())
+	}
 
 	local := mustRun(t, dir, "git", "rev-parse", "feature")
 	for name, ref := range map[string]string{"remote": remote, "box": box} {
@@ -710,6 +714,63 @@ func TestSignRepairsAPreSigningLineageWhenAsked(t *testing.T) {
 	for _, sha := range strings.Fields(mustRun(t, dir, "git", "rev-list", "feature", "--not", "origin/main")) {
 		if raw := mustRun(t, dir, "git", "cat-file", "commit", sha); !strings.Contains(raw, "gpgsig") {
 			t.Errorf("unsigned commit remains: %s", short(sha))
+		}
+	}
+}
+
+func TestSignRefusesRepairOverChangedPublishedCommits(t *testing.T) {
+	dir, remote := signRepo(t)
+	mustRun(t, dir, "git", "reset", "--hard", "--quiet", "main")
+	commit(t, dir, "archive.txt", "no xattrs\n", "release: strip xattrs")
+	boundary := mustRun(t, dir, "git", "rev-parse", "HEAD")
+	commit(t, dir, "workflow.txt", "publish unsigned assets\n", "release: sign in CI")
+	commit(t, dir, "install.txt", "installer\n", "release: add installer")
+
+	var out strings.Builder
+	o := signOpts(&out, "")
+	o.Push = true
+	if _, err := Sign(o); err != nil {
+		t.Fatalf("first round: %v\n%s", err, out.String())
+	}
+	published := mustRun(t, dir, "git", "rev-parse", "feature")
+
+	// The box replaces two published commits but retains the first unsigned commit.
+	mustRun(t, dir, "git", "reset", "--hard", "--quiet", boundary)
+	commit(t, dir, "workflow.txt", "publish signed assets\n", "release: sign in CI")
+	commit(t, dir, "install.txt", "installer\n", "release: add installer")
+	imported := mustRun(t, dir, "git", "rev-parse", "feature")
+	box := boxAtURL(t, dir, "feature")
+	mustRun(t, dir, "git", "switch", "--quiet", "main")
+	mustRun(t, dir, "git", "branch", "-D", "feature")
+	mustRun(t, dir, "git", "checkout", "--quiet", "-b", "feature")
+	harness(t)
+
+	cmd := root()
+	cmd.SetArgs([]string{"sign", "--host", "box", "--push", "-y"})
+	cmd.SetIn(strings.NewReader("y\n"))
+	out.Reset()
+	cmd.SetOut(&out)
+	t.Cleanup(func() { flagYes, flagPush = false, false })
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "refusing to repair") {
+		t.Errorf("want refusal before rebase, got %v\n%s", err, out.String())
+	}
+	if strings.Contains(out.String(), "Drop the duplicated") || strings.Contains(out.String(), "CONFLICT") {
+		t.Errorf("offered or attempted an unsafe rebase:\n%s", out.String())
+	}
+	if err != nil {
+		for _, want := range []string{"origin/feature", "release: sign in CI", "release: add installer"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("refusal missing %q: %v", want, err)
+			}
+		}
+	}
+	if err := checkInProgress(filepath.Join(dir, ".git")); err != nil {
+		t.Errorf("left an operation in progress: %v", err)
+	}
+	for repo, want := range map[string]string{dir: imported, box: imported, remote: published} {
+		if got := mustRun(t, repo, "git", "rev-parse", "feature"); got != want {
+			t.Errorf("%s moved to %s, want %s", repo, short(got), short(want))
 		}
 	}
 }
