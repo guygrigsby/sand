@@ -765,8 +765,12 @@ func TestPushRepointsTheHashSigningMoved(t *testing.T) {
 		t.Errorf("reply still quotes the pre-signing hash %s:\n%s", recorded, log)
 	}
 	// And the box learns it, so a re-pull does not hand the stale hash back to the agent.
-	if got := read(t, p); !strings.Contains(got, "commit: "+signed) {
-		t.Errorf("the file on the box kept the stale hash:\n%s", got)
+	boxThread, err := Parse(read(t, p))
+	if err != nil {
+		t.Fatalf("could not parse the updated thread on the box: %v", err)
+	}
+	if boxThread.Meta.Commit != signed {
+		t.Errorf("the file on the box has commit %q, want %q", boxThread.Meta.Commit, signed)
 	}
 }
 
