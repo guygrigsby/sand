@@ -1,5 +1,9 @@
 # PR review comments: `sand pr review`, `sand comments pull` / `push`
 
+All three commands accept `--worktree <sandbox-path>` to resolve the PR from that worktree's branch.
+An explicit PR must match the selected branch and repository. Pull starts its agent in the selected worktree.
+The flag cannot accompany `--repo-dir`. PR files keep their existing paths and repo lock because different worktrees can share the same drafts.
+
 ## New comments: `sand pr review`
 
 New findings travel separately from replies. An agent reviewing a local box branch writes

@@ -457,7 +457,7 @@ func importBranch(g gitCmd, o SignOpts, branch string) error {
 		return fmt.Errorf("imported %s from %s but could not check it out: %w\n"+
 			"nothing was rewritten and the import is in FETCH_HEAD, so once whatever git named above is\n"+
 			"out of the way (an untracked file it would overwrite, usually):\n"+
-			"  git switch -C %s FETCH_HEAD && sand sign %s", branch, o.Box, err, branch, branch)
+			"  git switch -C %s FETCH_HEAD && sand sign %s%s", branch, o.Box, err, branch, branch, worktreeArg())
 	}
 	return nil
 }
@@ -805,7 +805,7 @@ func checkPreSigningLineage(g gitCmd, dirty []string, remote, base, branch, head
 		// which is the whole point of handing it over, and a signature hook here stops the
 		// recovery from being runnable at all.
 		fix += fmt.Sprintf("\n  git push --no-verify --force-with-lease=refs/heads/%s:%s %s %s\n"+
-			"  sand sign --push", branch, head, box, branch)
+			"  sand sign --push%s", branch, head, shellQuote(box), branch, worktreeArg())
 	}
 	where := remoteBranch
 	if le.merged {

@@ -110,6 +110,9 @@ func currentBranchPR() (Target, bool, error) {
 		return Target{}, false, err
 	}
 	branch := currentBranch()
+	if selectedWorktree != nil {
+		branch = selectedWorktree.branch
+	}
 	var prs []struct {
 		Number      int    `json:"number"`
 		Title       string `json:"title"`
