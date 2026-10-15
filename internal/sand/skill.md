@@ -49,6 +49,7 @@ The Mac can select an existing sandbox worktree with `--worktree <sandbox-path>`
 This applies to `comments pull`, `comments push`, `ci pull`, `sign`, `up`/`push`, `pr create`, `pr review` and `status`.
 Pull starts the agent in that worktree. Signing imports its branch and returns the signed history there.
 Keep work in the selected checkout and report its full path with the branch at handoff.
+A branch lives in exactly one checkout per machine: if `git switch` answers "already checked out at ...", that path is the checkout the branch lives in. Work there; never `--ignore-other-worktrees`.
 The Mac uses the same flag on the next command, for example `sand up --worktree '~/projects/repo-fix'`.
 Review and CI files retain their usual PR directories and shared repo lock.
 

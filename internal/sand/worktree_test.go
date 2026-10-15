@@ -130,6 +130,42 @@ func testWorktreeSign(t *testing.T, local bool) {
 	}
 }
 
+// A ref has exactly one checkout, so a branch this Mac already has out in another worktree
+// makes the import's switch --force-create fail, and the fallback message named an untracked
+// file as the usual cause, which sends the operator hunting in the wrong place. The refusal
+// comes first and names the worktree holding the branch.
+func TestSignRefusesBranchCheckedOutInAnotherWorktree(t *testing.T) {
+	dir, _ := signRepo(t)
+	box := boxWorkingCheckout(t, dir, "feature")
+	t.Setenv("SAND_SSH", sshShim(t))
+
+	// topic is work the box has, and this Mac already has it out somewhere else.
+	mustRun(t, box, "git", "switch", "--quiet", "-c", "topic")
+	commit(t, box, "topic.txt", "topic work\n", "topic: from box")
+	mustRun(t, box, "git", "switch", "--quiet", "feature")
+	elsewhere := filepath.Join(t.TempDir(), "topic checkout")
+	mustRun(t, dir, "git", "worktree", "add", "--quiet", "-b", "topic", elsewhere)
+
+	featureHead := mustRun(t, dir, "git", "rev-parse", "feature")
+	var out strings.Builder
+	o := signOpts(&out, "")
+	o.Box, o.BoxHost, o.BoxDir = box, "box", box
+	o.Branch = "topic"
+	_, err := Sign(o)
+	if err == nil || !strings.Contains(err.Error(), "already checked out in the worktree at "+elsewhere) {
+		t.Fatalf("want a refusal naming %s, got %v\n%s", elsewhere, err, out.String())
+	}
+	if got := mustRun(t, dir, "git", "rev-parse", "feature"); got != featureHead {
+		t.Fatal("a refused import moved the checked-out branch")
+	}
+	if got := mustRun(t, dir, "git", "rev-parse", "topic"); got != featureHead {
+		t.Fatal("a refused import moved the worktree branch")
+	}
+	if currentBranch() != "feature" {
+		t.Fatal("a refused import switched the primary checkout")
+	}
+}
+
 func TestWorktreeRejectsInvalidSelection(t *testing.T) {
 	for _, kind := range []string{"empty", "missing", "detached", "branch conflict", "repo-dir conflict"} {
 		t.Run(kind, func(t *testing.T) {

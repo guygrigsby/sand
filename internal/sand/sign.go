@@ -414,6 +414,9 @@ func importBranch(g gitCmd, o SignOpts, branch string) error {
 	if o.Box == "" {
 		fmt.Fprintf(o.Out, "No box configured, so there is nothing to import: signing %s as this checkout\n"+
 			"has it. `sand config set host <alias>` is what makes a run read the box instead.\n", branch)
+		if err := checkSecondCheckout(g, branch); err != nil {
+			return err
+		}
 		if err := g.run("switch", branch); err != nil {
 			return fmt.Errorf("could not check out %s, so nothing was rewritten: %w", branch, err)
 		}
@@ -456,6 +459,9 @@ func importBranch(g gitCmd, o SignOpts, branch string) error {
 			branch, o.Box, short(before), short(imported), kept, kept, branch)
 	}
 
+	if err := checkSecondCheckout(g, branch); err != nil {
+		return err
+	}
 	if err := g.run("switch", "--force-create", branch, "FETCH_HEAD"); err != nil {
 		return fmt.Errorf("imported %s from %s but could not check it out: %w\n"+
 			"nothing was rewritten and the import is in FETCH_HEAD, so once whatever git named above is\n"+

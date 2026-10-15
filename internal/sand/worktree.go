@@ -88,6 +88,36 @@ func resolveWorktree(dir string) (worktree, error) {
 	return worktree{dir: lines[0], branch: lines[1]}, nil
 }
 
+// checkSecondCheckout refuses to switch to branch when another worktree of this repository has
+// it checked out: a ref has exactly one checkout, and git's own refusal arrives after the import
+// has printed, under a message that names an untracked file as the usual cause. Named here,
+// before anything moves, with the worktree that holds the branch.
+func checkSecondCheckout(g gitCmd, branch string) error {
+	raw, err := g.capture("worktree", "list", "--porcelain", "-z")
+	if err != nil {
+		return nil // the switch's own error is the answer then
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil
+	}
+	if resolved, err := filepath.EvalSymlinks(cwd); err == nil {
+		cwd = resolved
+	}
+	for _, wt := range parseWorktrees(raw) {
+		dir := wt.dir
+		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+			dir = resolved
+		}
+		if wt.branch == branch && dir != cwd {
+			return fmt.Errorf("%s is already checked out in the worktree at %s, and a ref has exactly one\n"+
+				"checkout, so this run cannot switch to it here. Run this from %s, or free the branch:\n"+
+				"  git -C %s switch --detach\nnothing was rewritten", branch, wt.dir, wt.dir, wt.dir)
+		}
+	}
+	return nil
+}
+
 func checkWorktreeTarget(t *Target) error {
 	if selectedWorktree == nil {
 		return nil
