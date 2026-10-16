@@ -12,7 +12,7 @@ Temporary checkouts are removed after the run; a dirty checkout remains with a w
 
 `--repo-dir` retains its directory-only meaning and cannot accompany `--worktree`.
 The repo lock remains shared because worktrees share Git refs and PR files. Separate locks would permit concurrent edits to the same drafts.
-A branch still has exactly one checkout per machine: git refuses a second, and signing refuses the import up front when another Mac worktree has the branch out, naming the directory that holds it (see `docs/signing.md`).
+A branch still has exactly one checkout per machine: git refuses a second, and signing moves its round to the Mac worktree that has the branch out rather than asking you to switch (see `docs/signing.md`).
 
 ## Where the work is: `sand status [pr]`
 

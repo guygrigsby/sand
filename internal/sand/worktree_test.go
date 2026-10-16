@@ -130,10 +130,59 @@ func testWorktreeSign(t *testing.T, local bool) {
 	}
 }
 
-// A ref has exactly one checkout, so a branch this Mac already has out in another worktree
-// makes the import's switch --force-create fail, and the fallback message named an untracked
-// file as the usual cause, which sends the operator hunting in the wrong place. The refusal
-// comes first and names the worktree holding the branch.
+// A named branch this Mac already has out in another worktree cannot be switched to here, so
+// signing used to refuse and name the directory. But the run knows where the branch lives, and
+// sending the operator there by hand is the tool refusing to do its own routing: signing moves
+// to that worktree and runs the round there, leaving this checkout exactly as it was.
+func TestSignRoutesToTheWorktreeHoldingTheBranch(t *testing.T) {
+	dir, _ := signRepo(t)
+	box := boxWorkingCheckout(t, dir, "feature")
+	t.Setenv("SAND_SSH", sshShim(t))
+
+	// topic is work the box has, and this Mac already has it out somewhere else.
+	for _, kv := range [][2]string{{"user.name", "Box Agent"}, {"user.email", "sand@example.invalid"}} {
+		mustRun(t, box, "git", "config", kv[0], kv[1])
+	}
+	mustRun(t, box, "git", "switch", "--quiet", "-c", "topic")
+	commit(t, box, "topic.txt", "topic work\n", "topic: from box")
+	mustRun(t, box, "git", "switch", "--quiet", "feature")
+	elsewhere := filepath.Join(t.TempDir(), "topic checkout")
+	mustRun(t, dir, "git", "worktree", "add", "--quiet", "-b", "topic", elsewhere)
+
+	featureHead := mustRun(t, dir, "git", "rev-parse", "feature")
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("local edits\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	o := signOpts(&out, "")
+	o.Box, o.BoxHost, o.BoxDir = box, "box", box
+	o.Branch = "topic"
+	res, err := signWorktree(o)
+	if err != nil {
+		t.Fatalf("signing in the branch's worktree: %v\n%s", err, out.String())
+	}
+	if res.Rewritten == 0 {
+		t.Fatalf("nothing was signed:\n%s", out.String())
+	}
+	head := mustRun(t, dir, "git", "rev-parse", "topic")
+	if got := mustRun(t, elsewhere, "git", "rev-parse", "HEAD"); got != head {
+		t.Fatal("the worktree did not receive the signed history")
+	}
+	if got := mustRun(t, elsewhere, "git", "cat-file", "commit", "HEAD"); !strings.Contains(got, "gpgsig ") {
+		t.Fatal("worktree HEAD was not signed")
+	}
+	if mustRun(t, dir, "git", "rev-parse", "feature") != featureHead || currentBranch() != "feature" || read(t, filepath.Join(dir, "a.txt")) != "local edits\n" {
+		t.Fatal("the primary checkout changed")
+	}
+	if !strings.Contains(out.String(), elsewhere) {
+		t.Fatalf("the run did not say where it signed:\n%s", out.String())
+	}
+}
+
+// Underneath the routing above, Sign itself still refuses a branch another worktree has out:
+// a ref has exactly one checkout, the import's switch --force-create cannot run here, and the
+// fallback message named an untracked file as the usual cause, which sends the operator hunting
+// in the wrong place. The refusal names the worktree holding the branch.
 func TestSignRefusesBranchCheckedOutInAnotherWorktree(t *testing.T) {
 	dir, _ := signRepo(t)
 	box := boxWorkingCheckout(t, dir, "feature")

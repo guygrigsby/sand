@@ -144,14 +144,14 @@ The same path applies inside `up`, `push` and `pr create`. Existing signature, l
   same URL fetches. `git fetch <box> <branch>` then `git switch -C <branch> FETCH_HEAD`, which is
   one fewer install on a new Mac, one fewer remote to keep pointed at the box, and one fewer tool
   that can read a branch name as a subcommand of its own.
-- **A branch another worktree has out is refused before the switch.** A ref has exactly one
-  checkout, so when the branch is checked out in a second worktree of the Mac's repository the
-  import's `switch -C` can only fail. Git's own refusal arrives after the import has printed,
-  under a wrapper that named an untracked file as the usual cause, which sends the operator
-  hunting in the wrong place. `checkSecondCheckout` asks `git worktree list` first and refuses
-  by name: the worktree holding the branch, running from there as the way through, and
-  `git -C <dir> switch --detach` as the way to free it. The same check covers the no-box
-  `switch`, which fails the same way for the same reason.
+- **A branch another worktree has out is signed there.** A ref has exactly one checkout, so
+  the import's `switch -C` cannot run in this checkout when a second worktree of the Mac's
+  repository has the branch. Refusing named the directory and sent the operator there by hand,
+  which is the tool declining to do routing it already knows: `signWorktree` moves the whole
+  round to the worktree holding the branch and says so, leaving this checkout's branch and
+  uncommitted files alone. A branch no worktree has out is imported and signed here, as before.
+  `checkSecondCheckout` remains underneath, so a worktree that appears mid-round still gets a
+  refusal naming it rather than git's untracked-file message.
 - **`-C`, not a merge or a pull.** The box is the authority on what the branch is. Anything on the
   Mac's copy that the box does not have is either the rewrite from a round whose realignment never
   landed, or a branch someone moved by hand, and both belong to `checkPreSigningLineage` to refuse
