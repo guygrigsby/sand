@@ -1,6 +1,6 @@
 ---
 name: sand
-description: Work GitHub issues, PR reviews, review comments and failing CI checks on the sandbox box, where sand puts issue context, new review drafts, review threads and CI failures under ~/.sand/<owner>/<repo>/. Use when asked to review the current branch, draft or write a new GitHub issue, brainstorm or implement the issue named by the current <user>/<issue>-... branch, address review feedback, reply to reviewer comments, work through a pulled PR review, or fix the failing checks pulled to pr-<n>/ci/.
+description: Work GitHub issues, PR reviews, review comments and failing CI checks on the sandbox box, where sand puts issue context, new review drafts, review threads and CI failures under ~/.sand/<owner>/<repo>/. Use when asked to review the current branch, draft or write a new GitHub issue, brainstorm or implement the issue named by the current <user>/<issue>-... branch or a named branch with no ticket, address review feedback, reply to reviewer comments, work through a pulled PR review, or fix the failing checks pulled to pr-<n>/ci/.
 ---
 
 # Working GitHub issues and PR reviews on the box
@@ -49,6 +49,7 @@ The Mac can select an existing sandbox worktree with `--worktree <sandbox-path>`
 This applies to `comments pull`, `comments push`, `ci pull`, `sign`, `up`/`push`, `pr create`, `pr review` and `status`.
 Pull starts the agent in that worktree. Signing imports its branch and returns the signed history there.
 Keep work in the selected checkout and report its full path with the branch at handoff.
+A branch lives in exactly one checkout per machine: if `git switch` answers "already checked out at ...", that path is the checkout the branch lives in. Work there; never `--ignore-other-worktrees`.
 The Mac uses the same flag on the next command, for example `sand up --worktree '~/projects/repo-fix'`.
 Review and CI files retain their usual PR directories and shared repo lock.
 

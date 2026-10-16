@@ -279,6 +279,62 @@ func TestNewCreatesIssueWorkspaceAndBranch(t *testing.T) {
 	}
 }
 
+// Work with no ticket never had a way in: `new` only took an issue number, so every branch had
+// to be invented by hand on both machines. A name is taken as given, no issue is fetched and no
+// handoff is written; `sand pr create` is the branch's way to a PR.
+func TestNewNamedBranchNeedsNoIssue(t *testing.T) {
+	dir, remote := signRepo(t)
+	mustRun(t, dir, "git", "switch", "--quiet", "main")
+	remoteBase, ghLog := harness(t)
+	boxRepo := filepath.Join(os.Getenv("HOME"), "projects", filepath.Base(dir))
+	if err := os.MkdirAll(filepath.Dir(boxRepo), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, filepath.Dir(boxRepo), "git", "clone", "--quiet", remote, boxRepo)
+	flagBase = "main"
+	t.Cleanup(func() { flagBase = "" })
+
+	if err := runNew([]string{"fix-the-wobble"}); err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	for _, repo := range []string{dir, boxRepo} {
+		if got := mustRun(t, repo, "git", "branch", "--show-current"); got != "fix-the-wobble" {
+			t.Errorf("%s branch %q, want fix-the-wobble", repo, got)
+		}
+		if got := mustRun(t, repo, "git", "rev-parse", "fix-the-wobble"); got != mustRun(t, repo, "git", "rev-parse", "origin/main") {
+			t.Errorf("%s: fix-the-wobble is not at origin/main", repo)
+		}
+	}
+	if b, err := os.ReadFile(ghLog); err == nil && len(b) > 0 {
+		t.Errorf("a named branch asked GitHub for anything:\n%s", b)
+	} else if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(remoteBase); !os.IsNotExist(err) {
+		t.Errorf("a named branch wrote a handoff under %s", remoteBase)
+	}
+}
+
+func TestNewRefusesBadBranchNames(t *testing.T) {
+	dir, _ := signRepo(t)
+	mustRun(t, dir, "git", "switch", "--quiet", "main")
+	harness(t)
+	for name, want := range map[string]string{
+		"fix..broken":  "not a branch name",
+		"guy/42-fixit": "sand new 42",
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := runNew([]string{name})
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("want a refusal naming %q, got %v", want, err)
+			}
+			if got := mustRun(t, dir, "git", "branch", "--show-current"); got != "main" {
+				t.Errorf("a refused new moved the checkout to %s", got)
+			}
+		})
+	}
+}
+
 func TestIssueCreateHasTheAgentDraftThenOpens(t *testing.T) {
 	signRepo(t)
 	remoteBase, ghLog := harness(t)

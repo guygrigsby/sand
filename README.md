@@ -91,11 +91,15 @@ work branch.
 Start an issue from the Mac:
 
     sand new 1532                 # fetch issue, create its box data dir and switch both checkouts
+    sand new fix-the-wobble       # work with no ticket: just the branch, on both machines
 
 This writes `issue.md` under `<remote_dir>/<owner>/<repo>/issue-1532/` and creates
 `<you>/1532-<issue-title>` from `origin/main` on the Mac and box, and leaves the current skill
 on the box for whichever agent you ask about the issue there. The box agent writes
-`pr-description.md` beside the issue before handoff.
+`pr-description.md` beside the issue before handoff. A branch name instead of a number skips
+the issue and its handoff: the branch is taken as given, and `sand pr create` is its way to a
+PR. A name that still looks like `<you>/<number>-<title>` is refused and pointed at
+`sand new <number>`.
 
 The `<you>` is `branch_prefix`, which is required and asked for by `sand init` and `sand config init`. It is the name `sand up` reads the issue number back out of when there is no PR yet, so a branch made by hand wants the same shape: `sand config set branch_prefix <yours>`.
 
