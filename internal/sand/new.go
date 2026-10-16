@@ -67,29 +67,63 @@ func requireBranchPrefix(cfg Config) error {
 	return nil
 }
 
-func runNew(args []string) error {
-	number, err := strconv.Atoi(args[0])
-	if err != nil || number < 1 {
-		return fmt.Errorf("issue must be a positive number, got %q", args[0])
+// checkNewBranchName refuses what git will not take, and names that read as an issue branch:
+// `up` takes the issue number back out of that shape, so one created without the issue sends it
+// looking for a ticket that was never filed.
+func checkNewBranchName(cfg Config, branch string) error {
+	if out, err := exec.Command("git", "check-ref-format", "--branch", branch).CombinedOutput(); err != nil {
+		return fmt.Errorf("%q is not a branch name git will take: %s", branch, strings.TrimSpace(string(out)))
 	}
+	if n, ok := issueNumberFromBranch(cfg.BranchPrefix, branch); ok {
+		return fmt.Errorf("%s reads as issue #%d's branch, but no issue comes with it; run `sand new %d`", branch, n, n)
+	}
+	return nil
+}
+
+func runNew(args []string) error {
 	cfg, err := Resolve(flagHost, flagRemoteDir)
 	if err != nil {
 		return err
 	}
-	if err := requireBranchPrefix(cfg); err != nil {
+	number, numErr := strconv.Atoi(args[0])
+	branch := args[0]
+	var have *issue
+	if numErr == nil {
+		if number < 1 {
+			return fmt.Errorf("issue must be a positive number, got %q", args[0])
+		}
+		if err := requireBranchPrefix(cfg); err != nil {
+			return err
+		}
+		fetched, err := fetchIssue(number)
+		if err != nil {
+			return err
+		}
+		have = &fetched
+		branch = issueBranch(cfg.BranchPrefix, number, have.Title)
+	} else if err := checkNewBranchName(cfg, branch); err != nil {
 		return err
 	}
-	issue, err := fetchIssue(number)
-	if err != nil {
-		return err
+
+	// The box checkout is per repo. An issue names its repo; a named branch has nothing to ask,
+	// and the checkout's directory name is the assumption thisRepoOnBox already makes everywhere.
+	repoName, remotePath := "", ""
+	if have != nil {
+		repoName = have.Repo
+		remotePath = Target{Owner: have.Owner, Repo: have.Repo, Number: number}.issuePath(cfg.RemoteDir)
+	} else {
+		top, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+		if err != nil {
+			return fmt.Errorf("not in a repo checkout: %w", err)
+		}
+		repoName = segment(filepath.Base(strings.TrimSpace(string(top))))
 	}
-	branch := issueBranch(cfg.BranchPrefix, number, issue.Title)
-	target := Target{Owner: issue.Owner, Repo: issue.Repo, Number: number}
-	remotePath := target.issuePath(cfg.RemoteDir)
 
 	if flagDryRun {
-		fmt.Printf("dry run: would create %s on this Mac and in %s:~/projects/%s\n", branch, cfg.Host, issue.Repo)
-		fmt.Printf("dry run: would write %s:%s/issue.md\n", cfg.Host, remotePath)
+		fmt.Printf("dry run: would create %s on this Mac and in %s:~/projects/%s\n", branch, cfg.Host, repoName)
+		if have != nil {
+			fmt.Printf("dry run: would write %s:%s/issue.md\n", cfg.Host, remotePath)
+		}
 		return nil
 	}
 
@@ -104,20 +138,22 @@ func runNew(args []string) error {
 		return fmt.Errorf("branch %s already exists on the Mac", branch)
 	}
 
-	dir, err := os.MkdirTemp("", "sand-new-")
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(dir)
-	body := fmt.Sprintf("# %s\n\n%s\n\n%s\n", issue.Title, issue.URL, strings.TrimSpace(issue.Body))
-	if err := os.WriteFile(filepath.Join(dir, "issue.md"), []byte(body), 0o644); err != nil {
-		return err
-	}
-	if err := sendDir(cfg.Host, dir, remotePath); err != nil {
-		return err
+	if have != nil {
+		dir, err := os.MkdirTemp("", "sand-new-")
+		if err != nil {
+			return err
+		}
+		defer os.RemoveAll(dir)
+		body := fmt.Sprintf("# %s\n\n%s\n\n%s\n", have.Title, have.URL, strings.TrimSpace(have.Body))
+		if err := os.WriteFile(filepath.Join(dir, "issue.md"), []byte(body), 0o644); err != nil {
+			return err
+		}
+		if err := sendDir(cfg.Host, dir, remotePath); err != nil {
+			return err
+		}
 	}
 
-	repoDir := checkoutDir(Target{Repo: issue.Repo})
+	repoDir := checkoutDir(Target{Repo: repoName})
 	remote := fmt.Sprintf("cd %s && test -z \"$(git status --porcelain)\" && git fetch %s && ! git show-ref --verify --quiet %s && git switch -c %s %s",
 		remoteQuote(repoDir), shellQuote(flagRemote), shellQuote("refs/heads/"+branch),
 		shellQuote(branch), shellQuote(flagRemote+"/"+flagBase))
@@ -134,7 +170,11 @@ func runNew(args []string) error {
 	if err := ensureRemoteSkill(cfg, os.Stdout); err != nil {
 		return err
 	}
-	fmt.Printf("%s #%d → %s:%s\nbranch: %s\n", issue.Slug(), issue.Number, cfg.Host, remotePath, branch)
+	if have != nil {
+		fmt.Printf("%s #%d → %s:%s\nbranch: %s\n", have.Slug(), have.Number, cfg.Host, remotePath, branch)
+	} else {
+		fmt.Printf("%s:%s\nbranch: %s\n", cfg.Host, repoDir, branch)
+	}
 	return nil
 }
 
@@ -197,7 +237,8 @@ func setupUp(args []string) (Config, Target, bool, error) {
 	number, ok := issueNumberFromBranch(cfg.BranchPrefix, branch)
 	if !ok {
 		return cfg, Target{}, false, fmt.Errorf("no open PR for branch %q in %s and its name does not identify an issue "+
-			"(want %s<issue>-<title>; `sand config set branch_prefix <yours>` if that prefix is not yours)",
+			"(want %s<issue>-<title>; `sand config set branch_prefix <yours>` if that prefix is not yours). "+
+			"`sand pr create` opens a PR for a branch with no issue",
 			branch, target.Slug(), branchPrefix(cfg.BranchPrefix))
 	}
 	issue, issueErr := fetchIssue(number)

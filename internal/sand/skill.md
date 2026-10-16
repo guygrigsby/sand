@@ -1,6 +1,6 @@
 ---
 name: sand
-description: Work GitHub issues, PR reviews, review comments and failing CI checks on the sandbox box, where sand puts issue context, new review drafts, review threads and CI failures under ~/.sand/<owner>/<repo>/. Use when asked to review the current branch, draft or write a new GitHub issue, brainstorm or implement the issue named by the current <user>/<issue>-... branch, address review feedback, reply to reviewer comments, work through a pulled PR review, or fix the failing checks pulled to pr-<n>/ci/.
+description: Work GitHub issues, PR reviews, review comments and failing CI checks on the sandbox box, where sand puts issue context, new review drafts, review threads and CI failures under ~/.sand/<owner>/<repo>/. Use when asked to review the current branch, draft or write a new GitHub issue, brainstorm or implement the issue named by the current <user>/<issue>-... branch or a named branch with no ticket, address review feedback, reply to reviewer comments, work through a pulled PR review, or fix the failing checks pulled to pr-<n>/ci/.
 ---
 
 # Working GitHub issues and PR reviews on the box

@@ -92,6 +92,20 @@ box commits. Creating a ref is bookkeeping, not source editing.
 
 - **The prefix is config, and it is required.** It was `guy/`, written into both `issueBranch` and `issueNumberFromBranch`, which is the one thing in here that could not work for a second person: their `sand new` named a branch after somebody else, and then their `sand up` could not find the issue number in a branch they had named themselves. Defaulting it to `$USER` made the same break quieter: one Mac branched as `guygrigsby/...` while the branches were actually `guy/...`, and `up` could not read its own handoff. So `init` asks, `new` and `up` refuse an unset prefix, and one implementation reads and writes it (`branchPrefix`), so the name `new` creates is by construction the name `up` parses.
 
+## Starting work with no ticket: `sand new <branch-name>`
+
+Anything that is not a number is a branch name, taken as given: no issue is fetched, no
+`issue.md` is written, and the prefix is not consulted. The branch is created from
+`<remote>/<base>` on both machines exactly as an issue branch is. Its way to a PR is
+`sand pr create`, which never needed an issue: the agent reads the branch diff, not a handoff.
+
+Two names are refused before anything moves. What `git check-ref-format --branch` rejects,
+because the failure would otherwise surface as a failed switch on the box. And a name that
+reads as `<prefix>/<number>-<title>` (`checkNewBranchName`), because `up` takes the issue
+number back out of that shape and would go looking for a ticket that was never filed; the
+refusal points at `sand new <number>`. The box checkout for a named branch comes from the Mac
+checkout's directory name, the assumption `thisRepoOnBox` already makes everywhere else.
+
 ## Creating a PR: `sand pr create`
 
 `pr create` closes the gap between finished code on the box and prose GitHub can open. It works from any current branch with no open PR. The configured agent starts in the box checkout under the same repo lock as review and CI agents, reads the full branch diff and commit history and uses the voice skill's `pr-description` register: `~/.claude/voice/rules.md`, `~/.claude/voice/voice.md` and matching corpus samples. A branch named for an issue also gets its existing `issue.md`; other branches need no issue. The agent writes a one-line `pr-title.txt` and byte-preserved GitHub Markdown to `pr-description.md` under the repo's sand directory. Code fences need no transport encoding or parsing because the body stays a file through `gh pr create --body-file`.
