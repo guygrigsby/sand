@@ -99,6 +99,9 @@ func loadIssueDraft(cfg Config, draftDir string) (issueDraft, error) {
 	defer os.RemoveAll(dir)
 
 	b, err := os.ReadFile(path.Join(dir, "issue.md"))
+	if os.IsNotExist(err) {
+		return issueDraft{}, fmt.Errorf("no issue draft at %s:%s/issue.md; pass a brief to have the agent write one, or ask the agent on the box to draft it", cfg.Host, draftDir)
+	}
 	if err != nil {
 		return issueDraft{}, fmt.Errorf("reading %s:%s/issue.md: %w", cfg.Host, draftDir, err)
 	}

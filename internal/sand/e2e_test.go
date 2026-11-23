@@ -419,8 +419,8 @@ func TestIssueCreateRejectsAStaleDraftTheAgentDidNotWrite(t *testing.T) {
 	t.Cleanup(func() { flagAgent = "" })
 
 	err := runIssueCreate("A brief the agent ignores")
-	if err == nil || !strings.Contains(err.Error(), "issue.md") {
-		t.Fatalf("want missing fresh draft error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "no issue draft at") || strings.Contains(err.Error(), "sand-fetch-") {
+		t.Fatalf("want missing fresh draft error naming the box path, got %v", err)
 	}
 	if strings.Contains(read(t, ghLog), "issue\ncreate") {
 		t.Errorf("opened an issue from the stale draft:\n%s", read(t, ghLog))
