@@ -77,6 +77,12 @@ the skill may have no checkout and no `make`.
 `sand skill install --dry-run` previews the local path and linking operation without writing
 the skill or creating harness links. The flag applies to both local and remote installation.
 
+A `--host` typed on the command line implies `--remote`. It once did not: `sand skill install
+--host ubuntu@box` wrote the Mac's own `~/.agents/skills` and reported success, with the host
+silently ignored. Only the flag implies it (`cmd.Flags().Changed("host")`); a host from the
+config file or `SAND_HOST` is there for every other command and does not turn a plain install
+on a machine that has the binary into a remote one.
+
 ## The rule
 
 **Every change to this repo updates `skill.md` in the same commit.** The skill is the only thing

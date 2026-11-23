@@ -274,3 +274,20 @@ func TestLocalSkillDryRunDoesNotWrite(t *testing.T) {
 		t.Fatal("skill install --dry-run wrote the installed skill")
 	}
 }
+
+// `sand skill install --host box` once installed on the Mac that typed it, because only --remote
+// meant the box. A host named on the command line is the box.
+func TestSkillInstallHostFlagMeansTheBox(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cmd := root()
+	cmd.SetArgs([]string{"skill", "install", "--dry-run", "--host", "ubuntu@box"})
+	var out strings.Builder
+	cmd.SetOut(&out)
+	t.Cleanup(func() { flagDryRun, flagHost, flagSkillRemote = false, "", false })
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "ubuntu@box:~/") {
+		t.Fatalf("--host did not select the remote install:\n%s", out.String())
+	}
+}

@@ -552,11 +552,17 @@ func skillCmd() *cobra.Command {
 			"every agent harness installed there at it, so one file serves all of them and a\n" +
 			"re-install after an upgrade updates all of them. No checkout needed.\n\n" +
 			"--remote does the same on the box over ssh, which is the way the box gets it:\n" +
-			"there is no sand there to run. Every `comments pull` and `ci pull` does this\n" +
-			"before it starts an agent, so running it by hand is for a box you are setting up\n" +
+			"there is no sand there to run. Naming --host implies it, because a host on the\n" +
+			"command line is never about this machine. Every `comments pull` and `ci pull` does\n" +
+			"this before it starts an agent, so running it by hand is for a box you are setting up\n" +
 			"or a skill you want current before ssh'ing in yourself.",
 		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error { return runSkillInstall(cmd.OutOrStdout()) },
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Only a --host typed on this command line implies the box: a host in the config
+			// file or SAND_HOST is there for every other command, and must not turn a plain
+			// `sand skill install` on a machine with the binary into a remote one.
+			return runSkillInstall(cmd.OutOrStdout(), flagSkillRemote || cmd.Flags().Changed("host"))
+		},
 	}
 	install.Flags().BoolVar(&flagSkillRemote, "remote", false, "install on the box over ssh instead of here")
 	install.Flags().BoolVar(&flagDryRun, "dry-run", false, "say what would be installed, write nothing")
@@ -573,8 +579,8 @@ func skillCmd() *cobra.Command {
 	return c
 }
 
-func runSkillInstall(out io.Writer) error {
-	if flagSkillRemote {
+func runSkillInstall(out io.Writer, remote bool) error {
+	if remote {
 		cfg, err := Resolve(flagHost, flagRemoteDir)
 		if err != nil {
 			return err
